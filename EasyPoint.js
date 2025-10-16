@@ -1,4 +1,4 @@
-(()=>{"use strict";
+javascript:(()=>{try{
 /* ========= helpers ========= */
 const d=document,w=window;
 const S=(k,v)=>localStorage.setItem(k,JSON.stringify(v));
@@ -505,10 +505,4 @@ pasteInto(editor, (typeof list[i % list.length] === 'string' ? list[i % list.len
 _bestiltInt=setInterval(()=>{const panel=d.querySelector('#InfoPanelContainer');const t=panel?.innerText||'';const m=t.match(/Bestilt(?:\s*\(BxH\))?\s*[:\-]?\s*(\d{2,4})\s*[x×]\s*(\d{2,4})/i);badge.textContent=m?`— ${m[1]}x${m[2]}`:''},900);
 w.addEventListener('keydown',e=>{if(e.altKey&&e.key.toLowerCase()==='a'){e.preventDefault();btnRun.click()}});
 
-
-
-})();
-
-
-
-
+}catch(e){console.error(e);alert('Autofill error: '+(e&&e.message?e.message:e));}})();
