@@ -47,6 +47,43 @@ function tileSide(tile){return detectSide(groupLabel(tileGroup(tile)))}
 function tileHasSize(tile,size){const rx=new RegExp(`\\b${size.replace('x','[x×]')}\\b`,'i');if(rx.test((tile.innerText||'')))return true;const lbl=groupLabel(tileGroup(tile));const mappedRe=new RegExp(`mapped_${size.replace('x','[x×]')}(?:\\b|[_-])`,'i');if(mappedRe.test(lbl))return true;if(rx.test(lbl))return true;return false}
 async function selectTile(tile){const targets=tileClickTargets(tile);let selected=isTileSelected(tile);for(const t of targets){if(selected)break;t.scrollIntoView({block:'center'});t.dispatchEvent(new MouseEvent('pointerdown',{bubbles:true}));t.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));t.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));t.click();for(let i=0;i<8;i++){await sleep(80);if(isTileSelected(tile)){selected=true;break}}}if(!selected){const last=targets[0]||tile;last.focus?.();last.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,key:'Enter'}));last.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:'Enter'}));for(let i=0;i<6;i++){await sleep(70);if(isTileSelected(tile))break}}}
 
+async function writeTagForTile(tileEl, tag) {
+  const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
+
+  // 1) Make sure the info panel is open for this tile (click tile/body if needed)
+  tileEl?.click();
+  await sleep(250);
+
+  // 2) Switch to the "3rd party tag" tab
+  const tabs = [...document.querySelectorAll('button[role="tab"]')];
+  const tpTab = tabs.find(b => /3(?:rd)?\s*party\s*tag/i.test(b.textContent || ''));
+  if (tpTab) { tpTab.click(); await sleep(250); }
+
+  // 3) Find the visible CodeMirror and set the value via API
+  const panel = document.getElementById('InfoPanelContainer') || document;
+  const cmHost = panel.querySelector('.MuiTabPanel-root[role="tabpanel"]:not([hidden]) .CodeMirror');
+  if (!cmHost || !cmHost.CodeMirror) throw new Error('CodeMirror not found');
+  const cm = cmHost.CodeMirror;
+  cm.setValue(tag);
+  cm.focus();
+  cm.execCommand('goDocEnd');   // nudge "dirty" state
+  await sleep(150);
+
+  // 4) Click a save/update button (try panel first, then page-level "Oppdater")
+  const inPanelBtns = [...panel.querySelectorAll('button,[role="button"]')];
+  let saveBtn = inPanelBtns.find(b => /lagre|save|oppdater|update|reprocess|send på nytt|send inn på nytt/i.test(
+    (b.textContent||'') + ' ' + (b.title||'') + ' ' + (b.getAttribute('aria-label')||'')
+  ));
+  if (!saveBtn) {
+    saveBtn = [...document.querySelectorAll('button[title],button')].find(b =>
+      /oppdater/i.test((b.title||'') + ' ' + (b.textContent||'')));
+  }
+  if (saveBtn) { saveBtn.click(); await sleep(400); }
+  else { console.warn('Save/Update button not found after writing tag'); }
+}
+
+writeTagForTile(tileEl, tagString)
+
 /* ========= mapping import (CSV/JSON + Excel paste + DnD) ========= */
 function parseCSV(text){let rows=[],row=[],f='',q=false;const first=(text.split(/\r?\n/).find(l=>l.trim().length>0)||'');const c1=(first.match(/,/g)||[]).length,c2=(first.match(/;/g)||[]).length,c3=(first.match(/\t/g)||[]).length;const del=c3>=c2&&c3>=c1?'\t':(c2>c1?';':',');for(let i=0;i<text.length;i++){const ch=text[i];if(ch=='"'){if(q&&text[i+1]=='"'){f+='"';i++}else q=!q}else if(!q&&ch===del){row.push(f);f=''}else if(!q&&ch=='\n'){row.push(f);rows.push(row);row=[];f=''}else if(!q&&ch=='\r'){}else f+=ch}row.push(f);rows.push(row);return rows}
 function pickHeader(h,names){const L=h.map(x=>String(x||'').toLowerCase());for(const n of names){let i=L.indexOf(n);if(i>-1)return i;for(let k=0;k<L.length;k++) if(L[k].includes(n)) return k}return -1}
@@ -607,5 +644,6 @@ _bestiltInt=setInterval(()=>{const panel=d.querySelector('#InfoPanelContainer');
 w.addEventListener('keydown',e=>{if(e.altKey&&e.key.toLowerCase()==='a'){e.preventDefault();btnRun.click()}});
 
 })();
+
 
 
