@@ -119,9 +119,94 @@ function sizesFromExpanded(details){if(!details) return[];const entries=[];const
 function pickTilesForEntry(details,entry){let tiles=getAllTiles(details).filter(t=>tileHasSize(t,entry.size));if(entry.variant) tiles=tiles.filter(t=>(tileVariant(t)||null)===entry.variant);if(entry.side) tiles=tiles.filter(t=>(tileSide(t)||null)===entry.side);return tiles}
 
 /* ========= 3rd-party tab + save/reprocess ========= */
-async function open3PTab(){const t=[...d.querySelectorAll('button[role="tab"],a[role="tab"],button,a')].filter(vis).find(b=>/\b3(?:rd)?\s*party\s*tag\b/i.test(b.textContent||''));if(t){t.click()}const editor=await waitFor(()=>{const panel=d.querySelector('#InfoPanelContainer')||d;const cm=[...panel.querySelectorAll('.CodeMirror')].find(vis);if(cm) return{kind:'cm',el:cm,panel,cm:cm.CodeMirror};const ta=[...panel.querySelectorAll('textarea')].find(vis);if(ta) return{kind:'ta',el:ta,panel};return null},4000,120);return editor||null}
-function pasteInto(target,value){if(!target) return;if(target.kind==='cm'&&target.cm){try{const cm=target.cm;cm.setValue((value||'')+'');cm.refresh?.();return}catch{}}const ta=target.el||target;ta.scrollIntoView({block:'center'});ta.focus();ta.value=value;ta.dispatchEvent(new Event('input',{bubbles:true}));ta.dispatchEvent(new Event('change',{bubbles:true}))}
-async function clickSaveOrReprocess(scope){const root=scope?.panel||d.querySelector('#InfoPanelContainer')||d;const btn=[...root.querySelectorAll('button')].filter(vis).find(b=>{const t=(b.textContent||'').toLowerCase();return /lagre|save|oppdater|update|send inn på nytt|reprocess/i.test(t)&&!b.disabled&&!b.classList.contains('Mui-disabled')});if(btn){btn.scrollIntoView({block:'center'});btn.click();await sleep(700);return true}return false}
+async function open3PTab(){
+  const panelRoot = d.querySelector('#InfoPanelContainer') || d;
+
+  // Helper to pick the currently visible editor (CM preferred)
+  const pickVisibleEditor = () => {
+    const cmEl = [...panelRoot.querySelectorAll('.CodeMirror')].find(vis);
+    if (cmEl && cmEl.CodeMirror) {
+      return { kind: 'cm', el: cmEl, panel: panelRoot, cm: cmEl.CodeMirror };
+    }
+    const taEl = [...panelRoot.querySelectorAll('textarea')].find(vis);
+    if (taEl) return { kind: 'ta', el: taEl, panel: panelRoot };
+    return null;
+  };
+
+  // 1) If already open, return immediately
+  const quick = pickVisibleEditor();
+  if (quick) return quick;
+
+  // 2) Click the "3rd party tag" tab (hyphen/plural/alt-language tolerant)
+  const tab = [
+  ...d.querySelectorAll('[role="tab"]'),          // highest priority
+  ...d.querySelectorAll('button,a')               // fallback
+].filter(vis).find(b => {
+  const t = (b.textContent || '').trim().toLowerCase();
+  return /(?:\b(?:3(?:rd)?|third)[\s-]*party[\s-]*tags?\b|\btredje(?:parts)?[\s-]*tagg?er?\b|\b3\.*\s*parts?[\s-]*tagg?er?\b)/i.test(t);
+});
+
+  if (tab) {
+    tab.scrollIntoView({ block: 'center' });
+    tab.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    tab.dispatchEvent(new MouseEvent('mousedown',    { bubbles: true }));
+    tab.dispatchEvent(new MouseEvent('mouseup',      { bubbles: true }));
+    tab.click();
+  }
+
+  // 3) Wait for editor to materialize
+  const editor = await waitFor(() => pickVisibleEditor(), 8000, 150);
+  return editor || null;
+}
+
+function pasteInto(target, value){
+  if (!target) return;
+  const val = (value ?? '') + '';
+
+if (target.kind === 'cm' && target.cm) {
+  const cm = target.cm;
+  (cm.getDoc?.().setValue ? cm.getDoc().setValue.bind(cm.getDoc()) : cm.setValue)(val);
+  cm.refresh?.();
+  cm.save?.();
+  const maybeTA = target.el?.querySelector?.('textarea');
+  if (maybeTA) {
+    maybeTA.dispatchEvent(new Event('input', { bubbles: true }));
+    maybeTA.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  return;
+  }
+
+  // Fallback: plain <textarea>
+  const ta = target.el || target;
+  ta.scrollIntoView({ block: 'center' });
+  ta.focus?.();
+  ta.value = val;
+  ta.dispatchEvent(new Event('input',  { bubbles: true }));
+  ta.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+async function clickSaveOrReprocess(scope){
+  const root = scope?.panel || d.querySelector('#InfoPanelContainer') || d;
+
+  const isCandidate = (b) => {
+    if (b.disabled || b.classList.contains('Mui-disabled')) return false;
+    const t = (b.textContent || '').trim().toLowerCase();
+    // include “save changes / lagre endringer” etc.
+return /^(lagre|lagre endringer|save|save changes|oppdater|oppdater endringer|oppdater tagg?|update|update tag|re-?submit|send inn på nytt|send på nytt|re-?process|reprocess)$/i
+  .test(t);
+  };
+
+  const btn = [...root.querySelectorAll('button')].filter(vis).find(isCandidate);
+  if (!btn) return false;
+
+  btn.scrollIntoView({ block: 'center' });
+  btn.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+  btn.dispatchEvent(new MouseEvent('mousedown',   { bubbles: true }));
+  btn.dispatchEvent(new MouseEvent('mouseup',     { bubbles: true }));
+  btn.click();
+  await sleep(700);
+  return true;
+}
 
 /* ========= UI ========= */
 (function injectCSS(){const st=d.createElement('style');st.textContent=`
@@ -251,7 +336,29 @@ renderMapChip();
 
 /* ========= image helpers ========= */
 function getTileDropzoneInput(tile){return tile.querySelector('input[type="file"]')||null}
-async function uploadImageToTile(tile,file){const inp=getTileDropzoneInput(tile);if(!inp) return false;const dt=new DataTransfer();dt.items.add(file);inp.files=dt.files;inp.dispatchEvent(new Event('input',{bubbles:true}));inp.dispatchEvent(new Event('change',{bubbles:true}));await sleep(300);return true}
+async function uploadImageToTile(tile, file){
+  const inp = getTileDropzoneInput(tile);
+  if (!inp) return false;
+
+  try {
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    inp.files = dt.files;
+  } catch {
+    // Fallback: some UIs listen to drop events; simulate a drop
+    const dtLike = { files: [file], types: ['Files'], getData: ()=>'',
+                     dropEffect: 'copy', effectAllowed: 'all' };
+    const ev = new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dtLike });
+    inp.dispatchEvent(ev);
+    // If the UI ignores drop on the input, try setting .files directly if allowed
+    try { inp.files = (new ClipboardEvent('paste', { dataType: 'Files', data: [file] })).clipboardData.files; } catch {}
+  }
+
+  inp.dispatchEvent(new Event('input', { bubbles: true }));
+  inp.dispatchEvent(new Event('change', { bubbles: true }));
+  await sleep(300);
+  return true;
+}
 function parseSizeFromName(name){const m=String(name||'').match(/(\d{2,4})[x×](\d{2,4})/i);return m?`${m[1]}x${m[2]}`:''}
 function parseImageMeta(file){return{size:cs(parseSizeFromName(file.name)),side:detectSide(file.name),file}}
 function poolKey(size,side){return `${size}|${side||''}`}
@@ -348,42 +455,35 @@ function previewPlannedPlacements(byId) {
   const pools = buildTagPools(mapping);
   LOG(`Mode: ${pools.hasLineIds ? 'Line-targeted (IDs in CSV).' : 'Global (no line IDs in CSV).'}`);
 
-  for (const [id, arr] of byId.entries()){
+  for (const [id, arr] of byId.entries()) {
     // group by size|variant|side
     const groups = new Map(); // key -> { entry, tiles: [] }
-    for (const e of arr){
+    for (const e of arr) {
       const key = `${e.size}|${e.variant||''}|${e.side||''}`;
-      if (!groups.has(key)) groups.set(key, { entry: { size:e.size, variant:e.variant||null, side:e.side||null }, tiles: [] });
+      if (!groups.has(key)) groups.set(key, { entry: { size: e.size, variant: e.variant || null, side: e.side || null }, tiles: [] });
       if (e.tile) groups.get(key).tiles.push(e.tile);
     }
 
     LOG(`→ Preview ${id}`);
-    if (!groups.size){ LOG('   (no tiles detected)'); continue; }
+    if (!groups.size) { LOG('   (no tiles detected)'); continue; }
 
-    for (const { entry, tiles } of groups.values()){
+    for (const { entry, tiles } of groups.values()) {
       const label = [entry.size, entry.variant, entry.side].filter(Boolean).join('/');
 
-      // 1) Prefer images
+      // Prefer images
       const imgsExact = imagePool.get(`${entry.size}|${entry.side||''}`) || [];
       const imgsAny   = entry.side ? (imagePool.get(`${entry.size}|`) || []) : [];
       const imgs = imgsExact.length ? imgsExact : imgsAny;
 
-      if (imgs.length){
-        const lines = [];
-for (let i=0;i<tiles.length;i++){
-  const payload = tagList[i % tagList.length];        // {tag,name} or string
-  const nice = (typeof payload === 'string') ? payload : (payload?.name || '(unnamed creative)');
-  lines.push(`tile#${i+1} ← CSV#${(i % tagList.length)+1}: ${nice}`);
-}
-
-        LOG(`   • ${label}  (images) ${tiles.length} tile(s)\n      ${lines.join('\n      ')}`);
-        continue; // images win over scripts
+      if (imgs.length) {
+        const names = tiles.map((_, i) => fileName(imgs[i % imgs.length]));
+        LOG(`   • ${label}  (images) ${tiles.length} tile(s)\n      ${names.map((n,i)=>`tile#${i+1} ← ${n}`).join('\n      ')}`);
+        continue;
       }
 
-      // 2) Scripts: line-scoped first, then global (with accurate pool label)
+      // Scripts: line-scoped first, then global
       const exactList = pools.getExact(id, entry.size, entry.variant || null);
       const sizeList  = pools.getSize(id, entry.size);
-
       const tagList   = exactList.length ? exactList : sizeList;
 
       const poolLabel = exactList.length
@@ -392,22 +492,22 @@ for (let i=0;i<tiles.length;i++){
         : (pools.maps.tagsBySizeLine.has(pools.kSize(id, entry.size))
             ? 'script line:size' : 'script global:size');
 
-      if (!tagList.length){
+      if (!tagList.length) {
         LOG(`   • ${label}  (no matching images or scripts)`);
         continue;
       }
 
-      const lines = [];
-for (let i=0;i<tiles.length;i++){
-  const payload = tagList[i % tagList.length];        // {tag,name} or string
-  const nice = (typeof payload === 'string') ? payload : (payload?.name || '(unnamed creative)');
-  lines.push(`tile#${i+1} ← CSV#${(i % tagList.length)+1}: ${nice}`);
-}
+      const lines = tiles.map((_, i) => {
+        const payload = tagList[i % tagList.length];
+        const nice = (typeof payload === 'string') ? payload : (payload?.name || '(unnamed creative)');
+        return `tile#${i+1} ← CSV#${(i % tagList.length)+1}: ${nice}`;
+      });
 
       LOG(`   • ${label}  (scripts) ${tiles.length} tile(s)  pool=${poolLabel}\n      ${lines.join('\n      ')}`);
     }
   }
 }
+
 
 
 
@@ -479,6 +579,7 @@ if (!list || !list.length) {
 LOG(`   • ${entry.size}${entry.variant?('/'+entry.variant):''}  tiles=${tiles.length}, pool=${pool}, tags=${list.length}`);
 
 for (let i = 0; i < tiles.length; i++) {
+  if (stopping) break;           // ← add this
   await selectTile(tiles[i]);
   const editor = await open3PTab();
   if (!editor) { LOG('   ! 3rd-party editor not found'); stats.err++; continue; }
