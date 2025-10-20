@@ -153,7 +153,7 @@ ui.style.cssText='position:fixed;right:16px;bottom:16px;z-index:2147483647;backg
 
 const hdr=d.createElement('div');
 hdr.style.cssText='cursor:move;user-select:none;display:flex;align-items:center;gap:10px;padding:8px 10px;background:#161922;border-radius:12px 12px 0 0;border-bottom:1px solid #2a2d37';
-const title=d.createElement('div'); title.textContent='EasyPoint';
+const title=d.createElement('div'); title.textContent='EasyPoint v2';
 const badge=d.createElement('span'); badge.style.opacity='.8'; badge.style.marginLeft='6px'; badge.textContent='';
 const mapChip=d.createElement('span'); mapChip.className='chip chip-none';
 const mapClear=d.createElement('button'); mapClear.textContent='×'; mapClear.title='Clear mapping'; mapClear.style.cssText='margin-left:4px;border:1px solid #2a2d37;background:#1a1d27;color:#e6e6e6;width:22px;height:22px;border-radius:6px;cursor:pointer';
@@ -348,66 +348,61 @@ function previewPlannedPlacements(byId) {
   const pools = buildTagPools(mapping);
   LOG(`Mode: ${pools.hasLineIds ? 'Line-targeted (IDs in CSV).' : 'Global (no line IDs in CSV).'}`);
 
-  for (const [id, arr] of byId.entries()){
+  for (const [id, arr] of byId.entries()) {
     // group by size|variant|side
-    const groups = new Map(); // key -> { entry, tiles: [] }
-    for (const e of arr){
+    const groups = new Map();
+    for (const e of arr) {
       const key = `${e.size}|${e.variant||''}|${e.side||''}`;
       if (!groups.has(key)) groups.set(key, { entry: { size:e.size, variant:e.variant||null, side:e.side||null }, tiles: [] });
       if (e.tile) groups.get(key).tiles.push(e.tile);
     }
 
     LOG(`→ Preview ${id}`);
-    if (!groups.size){ LOG('   (no tiles detected)'); continue; }
+    if (!groups.size) { LOG('   (no tiles detected)'); continue; }
 
-    for (const { entry, tiles } of groups.values()){
+    for (const { entry, tiles } of groups.values()) {
       const label = [entry.size, entry.variant, entry.side].filter(Boolean).join('/');
 
-      // 1) Prefer images
+      // Prefer images
       const imgsExact = imagePool.get(`${entry.size}|${entry.side||''}`) || [];
       const imgsAny   = entry.side ? (imagePool.get(`${entry.size}|`) || []) : [];
       const imgs = imgsExact.length ? imgsExact : imgsAny;
 
-      if (imgs.length){
-        const lines = [];
-for (let i=0;i<tiles.length;i++){
-  const payload = tagList[i % tagList.length];        // {tag,name} or string
-  const nice = (typeof payload === 'string') ? payload : (payload?.name || '(unnamed creative)');
-  lines.push(`tile#${i+1} ← CSV#${(i % tagList.length)+1}: ${nice}`);
-}
-
+      if (imgs.length) {
+        const lines = tiles.map((_, i) => `tile#${i+1} ← ${fileName(imgs[i % imgs.length])}`);
         LOG(`   • ${label}  (images) ${tiles.length} tile(s)\n      ${lines.join('\n      ')}`);
-        continue; // images win over scripts
+        continue;
       }
 
-      // 2) Scripts: line-scoped first, then global (with accurate pool label)
-      const exactList = pools.getExact(id, entry.size, entry.variant || null);
-      const sizeList  = pools.getSize(id, entry.size);
+      // Scripts
+      let poolItems = pools.getExact(id, entry.size, entry.variant || null);
+      let poolLabel = poolItems.length
+        ? (pools.maps.tagsByExactLine.has(pools.kExact(id, entry.size, entry.variant || null)) ? 'script line:exact' : 'script global:exact')
+        : '';
 
-      const tagList   = exactList.length ? exactList : sizeList;
+      if (!poolItems.length) {
+        poolItems = pools.getSize(id, entry.size);
+        poolLabel = poolItems.length
+          ? (pools.maps.tagsBySizeLine.has(pools.kSize(id, entry.size)) ? 'script line:size' : 'script global:size')
+          : '';
+      }
 
-      const poolLabel = exactList.length
-        ? (pools.maps.tagsByExactLine.has(pools.kExact(id, entry.size, entry.variant || null))
-            ? 'script line:exact' : 'script global:exact')
-        : (pools.maps.tagsBySizeLine.has(pools.kSize(id, entry.size))
-            ? 'script line:size' : 'script global:size');
-
-      if (!tagList.length){
+      if (!poolItems.length) {
         LOG(`   • ${label}  (no matching images or scripts)`);
         continue;
       }
 
-      const lines = [];
-for (let i=0;i<tiles.length;i++){
-  const payload = tagList[i % tagList.length];        // {tag,name} or string
-  const nice = (typeof payload === 'string') ? payload : (payload?.name || '(unnamed creative)');
-  lines.push(`tile#${i+1} ← CSV#${(i % tagList.length)+1}: ${nice}`);
-}
+      const lines = tiles.map((_, i) => {
+        const payload = poolItems[i % poolItems.length];
+        const nice = (typeof payload === 'string') ? payload : (payload?.name || '(unnamed creative)');
+        return `tile#${i+1} ← CSV#${(i % poolItems.length)+1}: ${nice}`;
+      });
 
       LOG(`   • ${label}  (scripts) ${tiles.length} tile(s)  pool=${poolLabel}\n      ${lines.join('\n      ')}`);
     }
   }
 }
+
 
 
 
