@@ -176,7 +176,7 @@ ui.style.cssText='position:fixed;right:16px;bottom:16px;z-index:2147483647;backg
 
 const hdr=d.createElement('div');
 hdr.style.cssText='cursor:move;user-select:none;display:flex;align-items:center;gap:10px;padding:8px 10px;background:#161922;border-radius:12px 12px 0 0;border-bottom:1px solid #2a2d37';
-const title=d.createElement('div'); title.textContent='EasyPoint';
+const title=d.createElement('div'); title.textContent='EasyPoint v2';
 const badge=d.createElement('span'); badge.style.opacity='.8'; badge.style.marginLeft='6px'; badge.textContent='';
 const mapChip=d.createElement('span'); mapChip.className='chip chip-none';
 const mapClear=d.createElement('button'); mapClear.textContent='×'; mapClear.title='Clear mapping'; mapClear.style.cssText='margin-left:4px;border:1px solid #2a2d37;background:#1a1d27;color:#e6e6e6;width:22px;height:22px;border-radius:6px;cursor:pointer';
@@ -286,12 +286,54 @@ async function uploadImageToInput(inp, file){
   }catch{ return false }
 }
 
-async function uploadImageToTile(tile, file){
-  const inp = getTileDropzoneInput(tile) 
-           || tile?.closest?.('.set-creativeContainer')?.querySelector('input[type="file"]');
-  if (!inp) return false;
-  return uploadImageToInput(inp, file);
+async function confirmReplaceIfPrompted(timeout=5000){
+  // Wait until a confirm/overwrite dialog shows up (MUI or similar)
+  const dlg = await waitFor(() => {
+    const el = document.querySelector('.MuiDialog-container, .MuiDialog-root, [role="dialog"]');
+    if (!el) return null;
+    const txt = (el.innerText || '').toLowerCase();
+    // Norwegian + English keywords to be safe
+    if (/(bekreftelse|erstatte|erstatt|overwrite|replace|confirm)/.test(txt)) return el;
+    return null;
+  }, timeout, 120);
+
+  if (!dlg) return false;
+
+  // Prefer an explicit OK/Yes/Replace button; otherwise click the last button (usually primary)
+  const btns = [...dlg.querySelectorAll('button')];
+  const isOK = b => /^(ok|ja|fortsett|erstatte|erstatt|update|replace|confirm)$/i.test((b.innerText || '').trim());
+  const okBtn = btns.find(isOK) || btns.at(-1);
+
+  if (okBtn) {
+    okBtn.scrollIntoView({block:'center'});
+    okBtn.click();
+    await sleep(200);
+    return true;
+  }
+  return false;
 }
+
+
+async function uploadImageToTile(tile,file){
+  const inp=getTileDropzoneInput(tile);
+  if(!inp) return false;
+  const dt=new DataTransfer();
+  dt.items.add(file);
+  inp.files=dt.files;
+  inp.dispatchEvent(new Event('input',{bubbles:true}));
+  inp.dispatchEvent(new Event('change',{bubbles:true}));
+
+  // give the UI a beat to render the dialog
+  await sleep(200);
+
+  // auto-confirm "replace" if prompted
+  await confirmReplaceIfPrompted(5000);
+
+  // short settle delay so the upload attaches before moving on
+  await sleep(250);
+  return true;
+}
+
 function parseSizeFromName(name){const m=String(name||'').match(/(\d{2,4})[x×](\d{2,4})/i);return m?`${m[1]}x${m[2]}`:''}
 function parseImageMeta(file){return{size:cs(parseSizeFromName(file.name)),side:detectSide(file.name),file}}
 function poolKey(size,side){return `${size}|${side||''}`}
