@@ -176,7 +176,7 @@ ui.style.cssText='position:fixed;right:16px;bottom:16px;z-index:2147483647;backg
 
 const hdr=d.createElement('div');
 hdr.style.cssText='cursor:move;user-select:none;display:flex;align-items:center;gap:10px;padding:8px 10px;background:#161922;border-radius:12px 12px 0 0;border-bottom:1px solid #2a2d37';
-const title=d.createElement('div'); title.textContent='EasyPoint v2';
+const title=d.createElement('div'); title.textContent='EasyPoint';
 const badge=d.createElement('span'); badge.style.opacity='.8'; badge.style.marginLeft='6px'; badge.textContent='';
 const mapChip=d.createElement('span'); mapChip.className='chip chip-none';
 const mapClear=d.createElement('button'); mapClear.textContent='×'; mapClear.title='Clear mapping'; mapClear.style.cssText='margin-left:4px;border:1px solid #2a2d37;background:#1a1d27;color:#e6e6e6;width:22px;height:22px;border-radius:6px;cursor:pointer';
@@ -274,7 +274,24 @@ renderMapChip();
 
 /* ========= image helpers ========= */
 function getTileDropzoneInput(tile){return tile.querySelector('input[type="file"]')||null}
-async function uploadImageToTile(tile,file){const inp=getTileDropzoneInput(tile);if(!inp) return false;const dt=new DataTransfer();dt.items.add(file);inp.files=dt.files;inp.dispatchEvent(new Event('input',{bubbles:true}));inp.dispatchEvent(new Event('change',{bubbles:true}));await sleep(300);return true}
+async function uploadImageToInput(inp, file){
+  try{
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    inp.files = dt.files;
+    inp.dispatchEvent(new Event('input', { bubbles:true }));
+    inp.dispatchEvent(new Event('change', { bubbles:true }));
+    await sleep(300);
+    return true;
+  }catch{ return false }
+}
+
+async function uploadImageToTile(tile, file){
+  const inp = getTileDropzoneInput(tile) 
+           || tile?.closest?.('.set-creativeContainer')?.querySelector('input[type="file"]');
+  if (!inp) return false;
+  return uploadImageToInput(inp, file);
+}
 function parseSizeFromName(name){const m=String(name||'').match(/(\d{2,4})[x×](\d{2,4})/i);return m?`${m[1]}x${m[2]}`:''}
 function parseImageMeta(file){return{size:cs(parseSizeFromName(file.name)),side:detectSide(file.name),file}}
 function poolKey(size,side){return `${size}|${side||''}`}
@@ -488,7 +505,27 @@ if (!tiles.length) {
 }
 
         const imgs=imageChoicesForEntry(entry);
-        if(imgs.length){for(let i=0;i<tiles.length;i++){await selectTile(tiles[i]);await uploadImageToTile(tiles[i],imgs[i%imgs.length]);await sleep(120)}LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''}  placed images=${tiles.length}`);wrote=true;continue}
+if (imgs.length) {
+  for (let i = 0; i < tiles.length; i++) {
+    const t = tiles[i];
+    t.scrollIntoView({ block: 'center' });
+    const f = imgs[i % imgs.length];
+
+    // Do NOT click the tile — avoids navigating to the preview
+    let ok = await uploadImageToTile(t, f);
+    if (!ok) {
+      // Fallback: some layouts keep one hidden input a level up
+      const alt = (t.closest('.set-creativeContainer') || document)
+                    .querySelector('input[type="file"]');
+      if (alt) ok = await uploadImageToInput(alt, f);
+    }
+
+    await sleep(160);
+  }
+  LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''}  placed images=${tiles.length}`);
+  wrote = true;
+  continue;
+}
         // Line-aware script pool: prefer exact(size+variant) for this line, then size for this line,
 // then global exact, then global size.
 const exactLine = pools.getExact(id, entry.size, entry.variant || null);
