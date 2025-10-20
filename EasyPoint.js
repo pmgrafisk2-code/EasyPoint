@@ -24,6 +24,25 @@ function extractLineIds(str){
   return [...ids];
 }
 
+// Ensures all creative tiles are actually mounted (virtualized list)
+async function ensureAllTilesMounted(root = d){
+  const scroller =
+    root.querySelector('.set-creativeSectionContainer') ||
+    root.querySelector('.set-creativeContainer') ||
+    d.querySelector('.set-creativeSectionContainer') ||
+    d.scrollingElement;
+
+  if (!scroller) return;
+
+  let prev = -1, still = 0;
+  for (let i = 0; i < 32 && still < 3; i++) {
+    scroller.scrollBy(0, 1e6);           // jump down
+    await sleep(300);
+    const count = d.querySelectorAll('.set-creativeTile').length;
+    if (count === prev) still++; else { prev = count; still = 0; }
+  }
+  scroller.scrollTo(0, 0);               // return to top
+}
 
 
 
@@ -39,7 +58,11 @@ function tileClickTargets(tile){return[
   tile
 ].filter(Boolean)}
 function isTileSelected(tile){if(tile.classList.contains('set-creativeTile__selected'))return true;if(tile.getAttribute('aria-selected')==='true')return true;if(tile.closest('[aria-selected="true"]'))return true;if(tile.closest('.set-creativeTile__selected'))return true;return false}
-function getAllTiles(details){let tiles=[...details.querySelectorAll('.set-creativeTile, .set-creativeTile__selected')].filter(vis);return tiles.filter(t=>!tiles.some(o=>o!==t&&o.contains(t)))}
+function getAllTiles(details){
+  let tiles = [...details.querySelectorAll('.set-creativeTile, .set-creativeTile__selected')];
+  // only keep top-level tiles (no nested dups)
+  return tiles.filter(t => !tiles.some(o => o !== t && o.contains(t)));
+}
 function tileGroup(tile){return tile.closest('.set-creativeContainer, .set-creativeSectionContainer')||tile.parentElement}
 function groupLabel(group){const n=group&&(group.querySelector('.set-cardLabel__main [title]')||group.querySelector('.set-cardLabel__main div[title]')||group.querySelector('.set-cardLabel__main'));return(n?.getAttribute?.('title')||n?.textContent||'')||''}
 function tileVariant(tile){const lbl=groupLabel(tileGroup(tile)).toLowerCase();if(/desktop/.test(lbl))return'desktop';if(/mobil|mobile/.test(lbl))return'mobil';return null}
@@ -153,7 +176,7 @@ ui.style.cssText='position:fixed;right:16px;bottom:16px;z-index:2147483647;backg
 
 const hdr=d.createElement('div');
 hdr.style.cssText='cursor:move;user-select:none;display:flex;align-items:center;gap:10px;padding:8px 10px;background:#161922;border-radius:12px 12px 0 0;border-bottom:1px solid #2a2d37';
-const title=d.createElement('div'); title.textContent='EasyPoint';
+const title=d.createElement('div'); title.textContent='EasyPoint v2';
 const badge=d.createElement('span'); badge.style.opacity='.8'; badge.style.marginLeft='6px'; badge.textContent='';
 const mapChip=d.createElement('span'); mapChip.className='chip chip-none';
 const mapClear=d.createElement('button'); mapClear.textContent='×'; mapClear.title='Clear mapping'; mapClear.style.cssText='margin-left:4px;border:1px solid #2a2d37;background:#1a1d27;color:#e6e6e6;width:22px;height:22px;border-radius:6px;cursor:pointer';
@@ -436,7 +459,11 @@ async function runOnIds(ids){
     if(stopping) break;
     try{
       const rowsForId=findRowsByIdAll(id); const detailsList=[]; let liveEntries=[];
-      for(const r of rowsForId){const det=await expandRow(r);await sleep(60);if(det) detailsList.push(det);liveEntries=liveEntries.concat(sizesFromExpanded(det))}
+      for(const r of rowsForId){const det = await expandRow(r);
+await ensureAllTilesMounted(det || d);   // <— add this line
+await sleep(60);
+if (det) detailsList.push(det);
+liveEntries = liveEntries.concat(sizesFromExpanded(det))}
       const uniq=new Map(); for(const e of liveEntries){const k=`${e.size}|${e.variant||''}|${e.side||''}`;if(!uniq.has(k)) uniq.set(k,{size:e.size,variant:e.variant,side:e.side})}
       const entries=[...uniq.values()];
       LOG(`→ ${id} sizes:[${prettyCounts(entries)||'—'}]`);
@@ -444,8 +471,22 @@ async function runOnIds(ids){
 
       let wrote=false;
       for(const entry of entries){
-        let tiles=[]; for(const det of detailsList) tiles=tiles.concat(pickTilesForEntry(det,entry));
-        tiles=Array.from(new Set(tiles)); if(!tiles.length){LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''} (no tile match)`);continue}
+        let tiles = [];
+for (const det of detailsList) tiles = tiles.concat(pickTilesForEntry(det, entry));
+tiles = Array.from(new Set(tiles));
+
+if (!tiles.length) {
+  await ensureAllTilesMounted();
+  tiles = [];
+  for (const det of detailsList) tiles = tiles.concat(pickTilesForEntry(det, entry));
+  tiles = Array.from(new Set(tiles));
+}
+
+if (!tiles.length) {
+  LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''} (no tile match)`);
+  continue;
+}
+
         const imgs=imageChoicesForEntry(entry);
         if(imgs.length){for(let i=0;i<tiles.length;i++){await selectTile(tiles[i]);await uploadImageToTile(tiles[i],imgs[i%imgs.length]);await sleep(120)}LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''}  placed images=${tiles.length}`);wrote=true;continue}
         // Line-aware script pool: prefer exact(size+variant) for this line, then size for this line,
@@ -501,4 +542,3 @@ _bestiltInt=setInterval(()=>{const panel=d.querySelector('#InfoPanelContainer');
 w.addEventListener('keydown',e=>{if(e.altKey&&e.key.toLowerCase()==='a'){e.preventDefault();btnRun.click()}});
 
 }catch(e){console.error(e);alert('Autofill error: '+(e&&e.message?e.message:e));}})();
-
