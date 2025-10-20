@@ -273,35 +273,34 @@ mapClear.onclick=()=>{clearMap();imagePool.clear();renderMapChip()};
 renderMapChip();
 
 
-/* ========= reuse images setting ========= */
-const REUSE_KEY = 'ap3p_reuse_images';
-let reuseImages = G(REUSE_KEY, true); // default: reuse to fill all tiles
+/* ========= reuse assets setting (images + scripts) ========= */
+const REUSE_KEY_NEW = 'ap3p_reuse_assets';
+const REUSE_KEY_OLD = 'ap3p_reuse_images';
+let reuseAssets = G(REUSE_KEY_NEW, G(REUSE_KEY_OLD, true)); // default ON
 
-// UI: checkbox next to the import controls
 const reuseWrap = document.createElement('label');
 reuseWrap.style.cssText='display:flex;align-items:center;gap:6px;margin-left:8px;font-size:12px;opacity:.95';
 const reuseCb = document.createElement('input');
 reuseCb.type='checkbox';
-reuseCb.checked = reuseImages;
+reuseCb.checked = reuseAssets;
 const reuseTxt = document.createElement('span');
-reuseTxt.textContent = 'Fill all tiles (reuse images)';
+reuseTxt.textContent = 'Fill all tiles (reuse images/scripts)';
 reuseWrap.append(reuseCb, reuseTxt);
-
-// insert before the dropzone in the toolbar row
 body.insertBefore(reuseWrap, drop);
 
-// remember last preview map so we can re-preview on toggle
-let _lastPreview = null;
+let _lastPreview = null; // if you already have this, keep just one definition
 
 reuseCb.onchange = () => {
-  reuseImages = reuseCb.checked;
-  S(REUSE_KEY, reuseImages);
+  reuseAssets = reuseCb.checked;
+  S(REUSE_KEY_NEW, reuseAssets);
   if (_lastPreview) {
     log.textContent = '';
-    LOG(`Mode: ${reuseImages ? 'Reuse images to fill all tiles' : "Don't reuse images"}`);
+    LOG(`Mode: ${reuseAssets ? 'Reuse to fill all tiles' : "Don't reuse (use each once)"}`);
     previewPlannedPlacements(_lastPreview);
   }
 };
+
+const reuseImages = reuseAssets;
 
 
 
@@ -483,14 +482,15 @@ function previewPlannedPlacements(byId) {
       const imgsAny   = entry.side ? (imagePool.get(`${entry.size}|`) || []) : [];
       const imgs = imgsExact.length ? imgsExact : imgsAny;
 
-      if (imgs.length) {
+if (imgs.length) {
   const lines = tiles.map((_, i) => {
-    const f = reuseImages ? imgs[i % imgs.length] : (i < imgs.length ? imgs[i] : null);
+    const f = reuseAssets ? imgs[i % imgs.length] : (i < imgs.length ? imgs[i] : null);
     return f ? `tile#${i+1} ← ${fileName(f)}` : `tile#${i+1} ← (no image)`;
   });
   LOG(`   • ${label}  (images) ${tiles.length} tile(s)\n      ${lines.join('\n      ')}`);
   continue;
 }
+
 
 
       // Scripts
@@ -507,17 +507,19 @@ function previewPlannedPlacements(byId) {
       }
 
       if (!poolItems.length) {
-        LOG(`   • ${label}  (no matching images or scripts)`);
-        continue;
-      }
+  LOG(`   • ${label}  (no matching images or scripts)`);
+  continue;
+}
 
-      const lines = tiles.map((_, i) => {
-        const payload = poolItems[i % poolItems.length];
-        const nice = (typeof payload === 'string') ? payload : (payload?.name || '(unnamed creative)');
-        return `tile#${i+1} ← CSV#${(i % poolItems.length)+1}: ${nice}`;
-      });
+const lines = tiles.map((_, i) => {
+  const payload = reuseAssets ? poolItems[i % poolItems.length]
+                              : (i < poolItems.length ? poolItems[i] : null);
+  const nice = payload ? tagLabel(payload) : '(no script)';
+  return `tile#${i+1} ← ${nice}`;
+});
 
-      LOG(`   • ${label}  (scripts) ${tiles.length} tile(s)  pool=${poolLabel}\n      ${lines.join('\n      ')}`);
+LOG(`   • ${label}  (scripts) ${tiles.length} tile(s)  pool=${poolLabel}\n      ${lines.join('\n      ')}`);
+
     }
   }
 }
@@ -635,21 +637,30 @@ if (!list || !list.length) {
 
 LOG(`   • ${entry.size}${entry.variant?('/'+entry.variant):''}  tiles=${tiles.length}, pool=${pool}, tags=${list.length}`);
 
+let used = 0, skipped = 0;
 for (let i = 0; i < tiles.length; i++) {
+  const payload = reuseAssets ? list[i % list.length]
+                              : (i < list.length ? list[i] : null);
+  if (!payload) { skipped++; continue; }
+
   await selectTile(tiles[i]);
   const editor = await open3PTab();
   if (!editor) { LOG('   ! 3rd-party editor not found'); stats.err++; continue; }
-pasteInto(editor, (typeof list[i % list.length] === 'string' ? list[i % list.length]
-                   : (list[i % list.length]?.tag || '')));
 
+  const tagStr = (typeof payload === 'string') ? payload : (payload?.tag || '');
+  pasteInto(editor, tagStr);
 
-  wrote = true;
+  used++;
   if (G('ap3p_auto', true)) {
     const ok = await clickSaveOrReprocess(editor);
     if (!ok) LOG('   ! Save/Update/Reprocess not found (continuing)');
   }
   await sleep(160);
 }
+
+LOG(`     → used scripts=${used}${skipped?` (skipped ${skipped})`:''}`);
+wrote = used > 0 || wrote;
+
 }
       if(wrote) stats.hit++; else stats.skip++; stats.done++; setInfo(stats); await sleep(160);
     }catch(e){LOG('   ! error: '+(e&&e.message?e.message:e));stats.err++;stats.done++;setInfo(stats)}
