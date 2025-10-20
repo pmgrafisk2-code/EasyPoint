@@ -176,7 +176,7 @@ ui.style.cssText='position:fixed;right:16px;bottom:16px;z-index:2147483647;backg
 
 const hdr=d.createElement('div');
 hdr.style.cssText='cursor:move;user-select:none;display:flex;align-items:center;gap:10px;padding:8px 10px;background:#161922;border-radius:12px 12px 0 0;border-bottom:1px solid #2a2d37';
-const title=d.createElement('div'); title.textContent='EasyPoint v2';
+const title=d.createElement('div'); title.textContent='EasyPoint';
 const badge=d.createElement('span'); badge.style.opacity='.8'; badge.style.marginLeft='6px'; badge.textContent='';
 const mapChip=d.createElement('span'); mapChip.className='chip chip-none';
 const mapClear=d.createElement('button'); mapClear.textContent='×'; mapClear.title='Clear mapping'; mapClear.style.cssText='margin-left:4px;border:1px solid #2a2d37;background:#1a1d27;color:#e6e6e6;width:22px;height:22px;border-radius:6px;cursor:pointer';
@@ -272,19 +272,52 @@ function clearMap(){mapping=[];S(MAP_KEY,mapping);renderMapChip()}
 mapClear.onclick=()=>{clearMap();imagePool.clear();renderMapChip()};
 renderMapChip();
 
+
+/* ========= reuse images setting ========= */
+const REUSE_KEY = 'ap3p_reuse_images';
+let reuseImages = G(REUSE_KEY, true); // default: reuse to fill all tiles
+
+// UI: checkbox next to the import controls
+const reuseWrap = document.createElement('label');
+reuseWrap.style.cssText='display:flex;align-items:center;gap:6px;margin-left:8px;font-size:12px;opacity:.95';
+const reuseCb = document.createElement('input');
+reuseCb.type='checkbox';
+reuseCb.checked = reuseImages;
+const reuseTxt = document.createElement('span');
+reuseTxt.textContent = 'Fill all tiles (reuse images)';
+reuseWrap.append(reuseCb, reuseTxt);
+
+// insert before the dropzone in the toolbar row
+body.insertBefore(reuseWrap, drop);
+
+// remember last preview map so we can re-preview on toggle
+let _lastPreview = null;
+
+reuseCb.onchange = () => {
+  reuseImages = reuseCb.checked;
+  S(REUSE_KEY, reuseImages);
+  if (_lastPreview) {
+    log.textContent = '';
+    LOG(`Mode: ${reuseImages ? 'Reuse images to fill all tiles' : "Don't reuse images"}`);
+    previewPlannedPlacements(_lastPreview);
+  }
+};
+
+
+
 /* ========= image helpers ========= */
 function getTileDropzoneInput(tile){return tile.querySelector('input[type="file"]')||null}
 async function uploadImageToInput(inp, file){
-  try{
-    const dt = new DataTransfer();
-    dt.items.add(file);
-    inp.files = dt.files;
-    inp.dispatchEvent(new Event('input', { bubbles:true }));
-    inp.dispatchEvent(new Event('change', { bubbles:true }));
-    await sleep(300);
-    return true;
-  }catch{ return false }
+  if (!inp) return false;
+  const dt = new DataTransfer();
+  dt.items.add(file);
+  inp.files = dt.files;
+  inp.dispatchEvent(new Event('input',{bubbles:true}));
+  inp.dispatchEvent(new Event('change',{bubbles:true}));
+  await sleep(300);
+  return true;
 }
+
 
 async function confirmReplaceIfPrompted(timeout=5000){
   // Wait until a confirm/overwrite dialog shows up (MUI or similar)
@@ -451,10 +484,14 @@ function previewPlannedPlacements(byId) {
       const imgs = imgsExact.length ? imgsExact : imgsAny;
 
       if (imgs.length) {
-        const lines = tiles.map((_, i) => `tile#${i+1} ← ${fileName(imgs[i % imgs.length])}`);
-        LOG(`   • ${label}  (images) ${tiles.length} tile(s)\n      ${lines.join('\n      ')}`);
-        continue;
-      }
+  const lines = tiles.map((_, i) => {
+    const f = reuseImages ? imgs[i % imgs.length] : (i < imgs.length ? imgs[i] : null);
+    return f ? `tile#${i+1} ← ${fileName(f)}` : `tile#${i+1} ← (no image)`;
+  });
+  LOG(`   • ${label}  (images) ${tiles.length} tile(s)\n      ${lines.join('\n      ')}`);
+  continue;
+}
+
 
       // Scripts
       let poolItems = pools.getExact(id, entry.size, entry.variant || null);
@@ -501,6 +538,7 @@ btnScan.onclick=async()=>{log.textContent='';scanned.length=0;const rows=findRow
   for(const r of rows){const id=rowId(r);const det=await expandRow(r);await sleep(80);let entries=sizesFromExpanded(det);const prev=byId.get(id)||[];byId.set(id,prev.concat(entries));await sleep(40)}
   const report=[];for(const [id,arr] of byId.entries()){const pretty=prettyCounts(arr.map(({size,variant})=>({size,variant})));LOG(`• ${id}  sizes:[${pretty||'-'}]`);const uniq=new Map();for(const e of arr){const k=`${e.size}|${e.variant||''}|${e.side||''}`;if(!uniq.has(k)) uniq.set(k,{size:e.size,variant:e.variant,side:e.side})}report.push({id,entries:[...uniq.values()],label:pretty||'-'})}
   LOG(`\nFound ${report.length} line items.`);try{previewPlannedPlacements(byId)}catch(e){LOG('! Preview failed: '+(e?.message||e))}
+  _lastPreview = byId;
   setInfo({items:report.length,done:0,hit:0,skip:0,err:0});scanned=report.slice();selected=new Set(report.map(r=>r.id));saveSelection();refreshList();
 };
 
@@ -545,29 +583,33 @@ if (!tiles.length) {
   LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''} (no tile match)`);
   continue;
 }
-
-        const imgs=imageChoicesForEntry(entry);
+const imgs = imageChoicesForEntry(entry);
 if (imgs.length) {
+  let placed = 0;
   for (let i = 0; i < tiles.length; i++) {
     const t = tiles[i];
+    const f = reuseImages ? imgs[i % imgs.length] : (i < imgs.length ? imgs[i] : null);
+    if (!f) continue; // no reuse and no image left → skip tile
+
     t.scrollIntoView({ block: 'center' });
-    const f = imgs[i % imgs.length];
 
     // Do NOT click the tile — avoids navigating to the preview
     let ok = await uploadImageToTile(t, f);
     if (!ok) {
-      // Fallback: some layouts keep one hidden input a level up
       const alt = (t.closest('.set-creativeContainer') || document)
                     .querySelector('input[type="file"]');
       if (alt) ok = await uploadImageToInput(alt, f);
     }
 
     await sleep(160);
+    placed++;
   }
-  LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''}  placed images=${tiles.length}`);
-  wrote = true;
+  LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''}  placed images=${placed}${placed<tiles.length?` (skipped ${tiles.length-placed})`:''}`);
+  wrote = placed > 0 || wrote;
   continue;
 }
+
+
         // Line-aware script pool: prefer exact(size+variant) for this line, then size for this line,
 // then global exact, then global size.
 const exactLine = pools.getExact(id, entry.size, entry.variant || null);
