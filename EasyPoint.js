@@ -192,73 +192,6 @@ function pickTilesForEntry(details,entry){let tiles=getAllTiles(details).filter(
 async function open3PTab(){const t=[...d.querySelectorAll('button[role="tab"],a[role="tab"],button,a')].filter(vis).find(b=>/\b3(?:rd)?\s*party\s*tag\b/i.test(b.textContent||''));if(t){t.click()}const editor=await waitFor(()=>{const panel=d.querySelector('#InfoPanelContainer')||d;const cm=[...panel.querySelectorAll('.CodeMirror')].find(vis);if(cm) return{kind:'cm',el:cm,panel,cm:cm.CodeMirror};const ta=[...panel.querySelectorAll('textarea')].find(vis);if(ta) return{kind:'ta',el:ta,panel};return null},4000,120);return editor||null}
 function pasteInto(target,value){if(!target) return;if(target.kind==='cm'&&target.cm){try{const cm=target.cm;cm.setValue((value||'')+'');cm.refresh?.();return}catch{}}const ta=target.el||target;ta.scrollIntoView({block:'center'});ta.focus();ta.value=value;ta.dispatchEvent(new Event('input',{bubbles:true}));ta.dispatchEvent(new Event('change',{bubbles:true}))}
 async function clickSaveOrReprocess(scope){const root=scope?.panel||d.querySelector('#InfoPanelContainer')||d;const btn=[...root.querySelectorAll('button')].filter(vis).find(b=>{const t=(b.textContent||'').toLowerCase();return /lagre|save|oppdater|update|send inn på nytt|reprocess/i.test(t)&&!b.disabled&&!b.classList.contains('Mui-disabled')});if(btn){btn.scrollIntoView({block:'center'});btn.click();await sleep(700);return true}return false}
-// ---------- Verify + retry helpers ----------
-
-function normalizeTagForCompare(s){
-  return String(s||'')
-    .replace(/\r\n/g, '\n')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function getEditorValue(editor){
-  if (!editor) return '';
-  if (editor.kind === 'cm' && editor.cm) {
-    try { return editor.cm.getValue() || ''; } catch { return ''; }
-  }
-  const ta = editor.el || editor;
-  return ta?.value || '';
-}
-
-async function pasteWithVerify(editor, value, tries = 2){
-  const want = normalizeTagForCompare(value);
-
-  for (let attempt = 0; attempt <= tries; attempt++){
-    pasteInto(editor, value);
-    await sleep(120);
-
-    // CodeMirror sometimes updates async, so give it a beat
-    if (editor.kind === 'cm') {
-      try { editor.cm?.refresh?.(); } catch {}
-      await sleep(80);
-    }
-
-    const got = normalizeTagForCompare(getEditorValue(editor));
-
-    // Strict match first; fallback allows tiny whitespace differences
-    if (got === want) return true;
-    if (got.replace(/\s+/g,'') === want.replace(/\s+/g,'')) return true;
-
-    await sleep(180);
-  }
-  return false;
-}
-
-async function saveWithRetry(editor, tries = 2){
-  for (let i = 0; i <= tries; i++){
-    const ok = await clickSaveOrReprocess(editor);
-    await waitForIdle(15000);
-
-    // If clickSaveOrReprocess couldn't find a button, no point retrying
-    if (!ok) return false;
-
-    // After saving, make sure we didn’t get navigated away
-    await ensureCampaignView();
-    await waitForIdle(8000);
-
-    // If UI is idle and we’re still alive, treat as success
-    return true;
-  }
-  return false;
-}
-
-// Call occasionally to "stabilize" long runs
-async function checkpoint(label=''){
-  await ensureCampaignView();
-  await waitForIdle(15000);
-  if (label) LOG(`   · checkpoint ${label}`);
-}
 
 
 /* ========= UI ========= */
@@ -790,46 +723,28 @@ if (!(await ensureCampaignView())) {
 
 await waitForIdle();
 
-// Periodic stabilization on huge runs
-if (i > 0 && (i % 8 === 0)) await checkpoint(`tile ${i}/${tiles.length}`);
-
-await ensureCampaignView();
-await waitForIdle(12000);
-
-await selectTile(tiles[i]);
-
-// If selection accidentally navigated, recover and retry once
-if (!(await ensureCampaignView())) {
-  LOG('   ! Lost campaign view; going back…');
-  await sleep(250);
-  await ensureCampaignView();
-  await waitForIdle(8000);
+// Optional: retry selection once if it still isn't selected
+if (!isTileSelected(tiles[i])) {
   await selectTile(tiles[i]);
+  await waitForIdle();
 }
 
-const editor = await open3PTab();
-if (!editor) { LOG('   ! 3rd-party editor not found'); stats.err++; continue; }
+  const editor = await open3PTab();
+  if (!editor) { LOG('   ! 3rd-party editor not found'); stats.err++; continue; }
 
-const tagStr = (typeof payload === 'string') ? payload : (payload?.tag || '');
+  const tagStr = (typeof payload === 'string') ? payload : (payload?.tag || '');
+  pasteInto(editor, tagStr);
 
-// ✅ Paste + verify (retry if needed)
-const pasted = await pasteWithVerify(editor, tagStr, 2);
-if (!pasted) {
-  LOG('   ! Paste did not stick after retries — skipping this tile');
-  stats.err++;
-  continue;
+  used++;
+  if (G('ap3p_auto', true)) {
+    const ok = await clickSaveOrReprocess(editor);
+    await waitForIdle(15000);
+await ensureCampaignView(); // if it navigated, come back before next tile
+
+    if (!ok) LOG('   ! Save/Update/Reprocess not found (continuing)');
+  }
+  await sleep(160);
 }
-
-used++;
-
-// ✅ Save with retry (only if auto enabled)
-if (G('ap3p_auto', true)) {
-  const saved = await saveWithRetry(editor, 2);
-  if (!saved) LOG('   ! Save/Update/Reprocess failed or not found (continuing)');
-}
-
-await sleep(160);
-
 
 LOG(`     → used scripts=${used}${skipped?` (skipped ${skipped})`:''}`);
 wrote = used > 0 || wrote;
