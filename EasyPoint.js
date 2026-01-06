@@ -51,12 +51,60 @@ async function ensureAllTilesMounted(root = d){
 function detectSide(str){const s=(str||'').toLowerCase().replace('høyre','hoyre');if(/\b(hoyre|right|r)\b/.test(s))return'right';if(/\b(venstre|left|l)\b/.test(s))return'left';return null}
 
 /* ========= tile helpers ========= */
-function tileClickTargets(tile){return[
-  tile.querySelector('.set-materialActionArea'),
-  tile.querySelector('.set-materialCardContent'),
-  tile.querySelector('button,[role="button"],[tabindex="0"]'),
-  tile
-].filter(Boolean)}
+function tileClickTargets(tile){
+  // Prefer label/text areas over the media/thumbnail area (thumbnail often opens preview)
+  return [
+    tile.querySelector('.set-cardLabel__main'),          // best: label main
+    tile.querySelector('.set-cardLabel'),               // label container
+    tile.querySelector('.MuiTypography-root'),          // any visible text area
+    tile.querySelector('[aria-label*="select" i]'),      // if they have a dedicated select control
+    tile                                                     // fallback
+  ].filter(Boolean);
+}
+
+async function selectTile(tile){
+  if (!tile) return false;
+
+  // If already selected, we’re done
+  if (isTileSelected(tile)) return true;
+
+  const targets = tileClickTargets(tile);
+
+  // Try a few times (MUI sometimes ignores the first click when busy)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    for (const t of targets) {
+      if (isTileSelected(tile)) return true;
+
+      try { t.scrollIntoView({ block: 'center' }); } catch {}
+      // Click sequence that tends to trigger selection without "opening"
+      t.dispatchEvent(new MouseEvent('pointerdown', { bubbles:true }));
+      t.dispatchEvent(new MouseEvent('mousedown',  { bubbles:true }));
+      t.dispatchEvent(new MouseEvent('mouseup',    { bubbles:true }));
+      t.click();
+
+      for (let i = 0; i < 10; i++) {
+        await sleep(80);
+        if (isTileSelected(tile)) return true;
+      }
+    }
+
+    // Keyboard fallback: focus tile and press Space (often "selects" without navigation)
+    try {
+      tile.scrollIntoView({ block:'center' });
+      tile.focus?.();
+      tile.dispatchEvent(new KeyboardEvent('keydown', { bubbles:true, key:' ' }));
+      tile.dispatchEvent(new KeyboardEvent('keyup',   { bubbles:true, key:' ' }));
+    } catch {}
+
+    for (let i = 0; i < 8; i++) {
+      await sleep(90);
+      if (isTileSelected(tile)) return true;
+    }
+  }
+
+  return isTileSelected(tile);
+}
+
 function isTileSelected(tile){if(tile.classList.contains('set-creativeTile__selected'))return true;if(tile.getAttribute('aria-selected')==='true')return true;if(tile.closest('[aria-selected="true"]'))return true;if(tile.closest('.set-creativeTile__selected'))return true;return false}
 function getAllTiles(details){
   let tiles = [...details.querySelectorAll('.set-creativeTile, .set-creativeTile__selected')];
@@ -68,7 +116,6 @@ function groupLabel(group){const n=group&&(group.querySelector('.set-cardLabel__
 function tileVariant(tile){const lbl=groupLabel(tileGroup(tile)).toLowerCase();if(/desktop/.test(lbl))return'desktop';if(/mobil|mobile/.test(lbl))return'mobil';return null}
 function tileSide(tile){return detectSide(groupLabel(tileGroup(tile)))}
 function tileHasSize(tile,size){const rx=new RegExp(`\\b${size.replace('x','[x×]')}\\b`,'i');if(rx.test((tile.innerText||'')))return true;const lbl=groupLabel(tileGroup(tile));const mappedRe=new RegExp(`mapped_${size.replace('x','[x×]')}(?:\\b|[_-])`,'i');if(mappedRe.test(lbl))return true;if(rx.test(lbl))return true;return false}
-async function selectTile(tile){const targets=tileClickTargets(tile);let selected=isTileSelected(tile);for(const t of targets){if(selected)break;t.scrollIntoView({block:'center'});t.dispatchEvent(new MouseEvent('pointerdown',{bubbles:true}));t.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));t.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));t.click();for(let i=0;i<8;i++){await sleep(80);if(isTileSelected(tile)){selected=true;break}}}if(!selected){const last=targets[0]||tile;last.focus?.();last.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,key:'Enter'}));last.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:'Enter'}));for(let i=0;i<6;i++){await sleep(70);if(isTileSelected(tile))break}}}
 
 /* ========= mapping import (CSV/JSON + Excel paste + DnD) ========= */
 function parseCSV(text){let rows=[],row=[],f='',q=false;const first=(text.split(/\r?\n/).find(l=>l.trim().length>0)||'');const c1=(first.match(/,/g)||[]).length,c2=(first.match(/;/g)||[]).length,c3=(first.match(/\t/g)||[]).length;const del=c3>=c2&&c3>=c1?'\t':(c2>c1?';':',');for(let i=0;i<text.length;i++){const ch=text[i];if(ch=='"'){if(q&&text[i+1]=='"'){f+='"';i++}else q=!q}else if(!q&&ch===del){row.push(f);f=''}else if(!q&&ch=='\n'){row.push(f);rows.push(row);row=[];f=''}else if(!q&&ch=='\r'){}else f+=ch}row.push(f);rows.push(row);return rows}
@@ -537,7 +584,24 @@ btnNone.onclick=()=>{selected=new Set();saveSelection();refreshList()};
 btnInv.onclick=()=>{const next=new Set();scanned.forEach(s=>{if(!selected.has(s.id)) next.add(s.id)});selected=next;saveSelection();refreshList()};
 
 btnScan.onclick=async()=>{log.textContent='';scanned.length=0;const rows=findRows();const byId=new Map();
-  for(const r of rows){const id=rowId(r);const det=await expandRow(r);await sleep(80);let entries=sizesFromExpanded(det);const prev=byId.get(id)||[];byId.set(id,prev.concat(entries));await sleep(40)}
+for (const r of rows) {
+  await ensureCampaignView();
+  await waitForIdle();
+
+  const id  = rowId(r);
+  const det = await expandRow(r);
+
+  await waitForIdle();
+  await ensureAllTilesMounted(det || d);
+
+  await sleep(80);
+
+  let entries = sizesFromExpanded(det);
+  const prev = byId.get(id) || [];
+  byId.set(id, prev.concat(entries));
+
+  await sleep(40);
+}
   const report=[];for(const [id,arr] of byId.entries()){const pretty=prettyCounts(arr.map(({size,variant})=>({size,variant})));LOG(`• ${id}  sizes:[${pretty||'-'}]`);const uniq=new Map();for(const e of arr){const k=`${e.size}|${e.variant||''}|${e.side||''}`;if(!uniq.has(k)) uniq.set(k,{size:e.size,variant:e.variant,side:e.side})}report.push({id,entries:[...uniq.values()],label:pretty||'-'})}
   LOG(`\nFound ${report.length} line items.`);try{previewPlannedPlacements(byId)}catch(e){LOG('! Preview failed: '+(e?.message||e))}
   _lastPreview = byId;
@@ -558,9 +622,12 @@ async function runOnIds(ids){
     if(stopping) break;
     try{
       const rowsForId=findRowsByIdAll(id); const detailsList=[]; let liveEntries=[];
-      for(const r of rowsForId){const det = await expandRow(r);
-await ensureAllTilesMounted(det || d);   // <— add this line
-await sleep(60);
+      for(const r of rowsForId){await ensureCampaignView();
+const det = await expandRow(r);
+await waitForIdle();
+await ensureAllTilesMounted(det || d);
+await sleep(80);
+
 if (det) detailsList.push(det);
 liveEntries = liveEntries.concat(sizesFromExpanded(det))}
       const uniq=new Map(); for(const e of liveEntries){const k=`${e.size}|${e.variant||''}|${e.side||''}`;if(!uniq.has(k)) uniq.set(k,{size:e.size,variant:e.variant,side:e.side})}
@@ -570,6 +637,9 @@ liveEntries = liveEntries.concat(sizesFromExpanded(det))}
 
       let wrote=false;
       for(const entry of entries){
+        await ensureCampaignView();
+await waitForIdle();
+
         let tiles = [];
 for (const det of detailsList) tiles = tiles.concat(pickTilesForEntry(det, entry));
 tiles = Array.from(new Set(tiles));
@@ -644,6 +714,20 @@ for (let i = 0; i < tiles.length; i++) {
   if (!payload) { skipped++; continue; }
 
   await selectTile(tiles[i]);
+  // If selection accidentally navigated somewhere, go back and retry once
+if (!(await ensureCampaignView())) {
+  LOG('   ! Lost campaign view; attempted to go back.');
+  await sleep(250);
+}
+
+await waitForIdle();
+
+// Optional: retry selection once if it still isn't selected
+if (!isTileSelected(tiles[i])) {
+  await selectTile(tiles[i]);
+  await waitForIdle();
+}
+
   const editor = await open3PTab();
   if (!editor) { LOG('   ! 3rd-party editor not found'); stats.err++; continue; }
 
@@ -653,6 +737,9 @@ for (let i = 0; i < tiles.length; i++) {
   used++;
   if (G('ap3p_auto', true)) {
     const ok = await clickSaveOrReprocess(editor);
+    await waitForIdle(15000);
+await ensureCampaignView(); // if it navigated, come back before next tile
+
     if (!ok) LOG('   ! Save/Update/Reprocess not found (continuing)');
   }
   await sleep(160);
@@ -673,4 +760,62 @@ wrote = used > 0 || wrote;
 _bestiltInt=setInterval(()=>{const panel=d.querySelector('#InfoPanelContainer');const t=panel?.innerText||'';const m=t.match(/Bestilt(?:\s*\(BxH\))?\s*[:\-]?\s*(\d{2,4})\s*[x×]\s*(\d{2,4})/i);badge.textContent=m?`— ${m[1]}x${m[2]}`:''},900);
 w.addEventListener('keydown',e=>{if(e.altKey&&e.key.toLowerCase()==='a'){e.preventDefault();btnRun.click()}});
 
+function inCampaignTableView(){
+  // Campaign list view has visible line rows
+  return !!document.querySelector('tr.set-matSpecDataRow');
+}
+
+function findBackToCampaignButton(){
+  // In your snapshot, the back arrow button has an SVG path starting with:
+  // M9.4 16.6L4.8 12...
+  // We'll match that safely.
+  const btns = [...document.querySelectorAll('button, [role="button"]')];
+  for (const b of btns) {
+    const p = b.querySelector('svg path');
+    const d = p?.getAttribute?.('d') || '';
+    if (d.startsWith('M9.4 16.6L4.8 12')) return b;
+  }
+  return null;
+}
+
+async function ensureCampaignView(){
+  if (inCampaignTableView()) return true;
+
+  const back = findBackToCampaignButton();
+  if (back) {
+    back.scrollIntoView({ block:'center' });
+    back.click();
+    // wait until the table view is back
+    await waitFor(() => inCampaignTableView(), 8000, 120);
+  }
+
+  return inCampaignTableView();
+}
+
+// Wait for "busy" overlays to clear (MUI Backdrop / progress)
+async function waitForIdle(timeout=12000){
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const backdrop = document.querySelector('.MuiBackdrop-root');
+    const progress = document.querySelector('[role="progressbar"], .MuiCircularProgress-root');
+
+    const backdropVisible = backdrop &&
+      getComputedStyle(backdrop).visibility !== 'hidden' &&
+      getComputedStyle(backdrop).display !== 'none' &&
+      getComputedStyle(backdrop).opacity !== '0';
+
+    const progressVisible = progress &&
+      getComputedStyle(progress).visibility !== 'hidden' &&
+      getComputedStyle(progress).display !== 'none' &&
+      getComputedStyle(progress).opacity !== '0';
+
+    if (!backdropVisible && !progressVisible) return true;
+    await sleep(120);
+  }
+  return true;
+}
+
+
+
 }catch(e){console.error(e);alert('Autofill error: '+(e&&e.message?e.message:e));}})();
+
