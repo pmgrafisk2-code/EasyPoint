@@ -365,6 +365,8 @@ async function checkpoint(label=''){
   if (label) LOG(`   · sjekkpunkt ${label}`);
 }
 
+function isEmpty3PValue(v){ return !String(v||'').trim(); }
+
 /* ========= UI ========= */
 (function injectCSS(){
   const st=d.createElement('style');
@@ -388,12 +390,12 @@ async function checkpoint(label=''){
   position:fixed; right:18px; bottom:18px; z-index:2147483648;
   background:#0b0c10; border:1px solid #2a2d37; color:#e6e6e6;
   padding:10px 12px; border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.45);
-  max-width: 360px; font: 12px/1.35 ui-sans-serif,system-ui; opacity:0; transform:translateY(6px);
+  max-width: 420px; font: 12px/1.35 ui-sans-serif,system-ui; opacity:0; transform:translateY(6px);
   transition: opacity .18s ease, transform .18s ease;
 }
 #ap3p_toast.show{opacity:1; transform:translateY(0px);}
 #ap3p_toast .t{font-weight:700;margin-bottom:4px}
-#ap3p_toast .s{opacity:.85}
+#ap3p_toast .s{opacity:.85;white-space:pre-wrap}
 
 /* Resize handles */
 #ap3p_bar .aprs{position:absolute;z-index:2147483648;background:transparent}
@@ -412,7 +414,7 @@ async function checkpoint(label=''){
 
 let ui=d.getElementById('ap3p_bar'); if(ui) ui.remove();
 ui=d.createElement('div'); ui.id='ap3p_bar';
-ui.style.cssText='position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#0e0f13;color:#e6e6e6;border:1px solid #2a2d37;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.45);min-width:780px;max-width:96vw;';
+ui.style.cssText='position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#0e0f13;color:#e6e6e6;border:1px solid #2a2d37;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.45);min-width:820px;max-width:96vw;';
 
 const hdr=d.createElement('div');
 hdr.style.cssText='cursor:move;user-select:none;display:flex;align-items:center;gap:10px;padding:8px 10px;background:#161922;border-radius:12px 12px 0 0;border-bottom:1px solid #2a2d37';
@@ -445,7 +447,7 @@ const btnInv=d.createElement('button'); btnInv.textContent='Inverter';
 listCtrls.append(btnAll,btnNone,btnInv);
 const list=d.createElement('div'); list.id='ap3p_list'; list.style.cssText='max-height:180px;overflow:auto;background:#0b0c10;border:1px solid #1b1e28;border-radius:8px;padding:6px';
 listWrap.append(listCtrls,list);
-const log=d.createElement('div'); log.style.cssText='height:220px;overflow:auto;background:#0b0c10;border-top:1px solid #1b1e28;border-radius:0 0 12px 12px;padding:8px 10px;font-family:ui-monospace,Consolas,monospace;white-space:pre-wrap';
+const log=d.createElement('div'); log.style.cssText='height:240px;overflow:auto;background:#0b0c10;border-top:1px solid #1b1e28;border-radius:0 0 12px 12px;padding:8px 10px;font-family:ui-monospace,Consolas,monospace;white-space:pre-wrap';
 ui.append(hdr,body,listWrap,log); d.body.appendChild(ui);
 
 const LOG=m=>{log.textContent+=m+'\n'; log.scrollTop=log.scrollHeight;};
@@ -467,7 +469,7 @@ function showToast(t,s=''){
     toast.querySelector('.s').textContent = s||'';
     toast.classList.add('show');
     if(toastTimer) clearTimeout(toastTimer);
-    toastTimer=setTimeout(()=>toast.classList.remove('show'), 1800);
+    toastTimer=setTimeout(()=>toast.classList.remove('show'), 2000);
   }catch{}
 }
 function flash(el){
@@ -484,7 +486,7 @@ function adjustHeights(totalH){
   const bodyH=body.offsetParent?body.getBoundingClientRect().height:0;
   const lstH=(listWrap.style.display==='none')?0:listWrap.getBoundingClientRect().height;
   const pad=24;
-  const logH=Math.max(100,totalH-(hdrH+bodyH+lstH+pad));
+  const logH=Math.max(110,totalH-(hdrH+bodyH+lstH+pad));
   log.style.height=logH+'px';
   ui.style.overflow='hidden';
 }
@@ -501,9 +503,9 @@ function adjustHeights(totalH){
   function onDown(e,dir){ if(e.button!==0)return; e.preventDefault(); const r=box.getBoundingClientRect(); rs={dir,sx:e.clientX,sy:e.clientY,x:r.left,y:r.top,w:r.width,h:r.height}; w.addEventListener('pointermove',onMove); w.addEventListener('pointerup',onUp); }
   function onMove(e){ if(!rs)return; const dx=e.clientX-rs.sx, dy=e.clientY-rs.sy; let x=rs.x,y=rs.y,wv=rs.w,hv=rs.h;
     if(/e/.test(rs.dir)) wv=Math.max(420,rs.w+dx);
-    if(/s/.test(rs.dir)) hv=Math.max(120,rs.h+dy);
+    if(/s/.test(rs.dir)) hv=Math.max(140,rs.h+dy);
     if(/w/.test(rs.dir)){ wv=Math.max(420,rs.w-dx); x=rs.x+dx; }
-    if(/n/.test(rs.dir)){ hv=Math.max(120,rs.h-dy); y=rs.y+dy; }
+    if(/n/.test(rs.dir)){ hv=Math.max(140,rs.h-dy); y=rs.y+dy; }
     Object.assign(box.style,{width:wv+'px',height:hv+'px',left:x+'px',top:y+'px',right:'auto',bottom:'auto'}); adjustHeights(hv);
   }
   function onUp(){ rs=null; w.removeEventListener('pointermove',onMove); w.removeEventListener('pointerup',onUp); }
@@ -519,7 +521,7 @@ function setMinimized(min){
     ui.style.height='38px'; ui.style.minWidth='0'; ui.style.width='max-content'; ui.style.maxWidth='96vw'; ui.style.overflow='hidden';
     (ui._resizerEls||[]).forEach(el=>el.style.display='none'); btnMin.textContent='+';
   }else{
-    ui.style.height=''; ui.style.minWidth='780px'; ui.style.width=''; ui.style.overflow='';
+    ui.style.height=''; ui.style.minWidth='820px'; ui.style.width=''; ui.style.overflow='';
     (ui._resizerEls||[]).forEach(el=>el.style.display=''); btnMin.textContent='–'; adjustHeights(ui.getBoundingClientRect().height);
   }
 }
@@ -556,7 +558,7 @@ function clearMap(){
 mapClear.onclick=()=>{clearMap();imagePool.clear();renderMapChip()};
 renderMapChip();
 
-/* ========= reuse assets setting (images + scripts) ========= */
+/* ========= toggles: gjenbruk / legg til / erstatt ========= */
 const REUSE_KEY_NEW = 'ap3p_reuse_assets';
 const REUSE_KEY_OLD = 'ap3p_reuse_images';
 let reuseAssets = G(REUSE_KEY_NEW, G(REUSE_KEY_OLD, true)); // default ON
@@ -571,19 +573,73 @@ reuseTxt.textContent = 'Fyll alle størrelser (gjenbruk bilder/scripts)';
 reuseWrap.append(reuseCb, reuseTxt);
 body.insertBefore(reuseWrap, drop);
 
-let _lastPreview = null;
-
 reuseCb.onchange = () => {
   reuseAssets = reuseCb.checked;
   S(REUSE_KEY_NEW, reuseAssets);
-  showToast('Modus endret', reuseAssets ? 'Gjenbruk på' : 'Gjenbruk av');
-  if (_lastPreview) {
-    log.textContent = '';
-    LOG(`Modus: ${reuseAssets ? 'Gjenbruk for å fylle alle størrelser' : "Ikke gjenbruk (bruk hver kun én gang)"}`);
-    previewPlannedPlacements(_lastPreview);
-  }
+  showToast('Gjenbruk', reuseAssets ? 'På (fyll alle fliser)' : 'Av (bruk hver rad én gang)');
+  if (_lastPreview) { log.textContent=''; previewPlannedPlacements(_lastPreview); }
 };
-const reuseImages = reuseAssets;
+let _lastPreview = null;
+
+// Legg til ekstra størrelser (failsafe: kun hvis størrelsen finnes i CSV)
+const ADD_KEY = 'ap3p_add_extra_sizes';
+let addExtraSizes = !!G(ADD_KEY, false);
+
+const addWrap = document.createElement('label');
+addWrap.style.cssText='display:flex;align-items:center;gap:6px;margin-left:8px;font-size:12px;opacity:.95';
+const addCb = document.createElement('input');
+addCb.type='checkbox';
+addCb.checked = addExtraSizes;
+const addTxt = document.createElement('span');
+addTxt.textContent = 'Legg til ekstra størrelser (hvis flere scripts enn fliser)';
+addWrap.append(addCb, addTxt);
+body.insertBefore(addWrap, drop);
+
+// Erstatt-modus: alle vs kun tomme
+const OVERWRITE_KEY = 'ap3p_overwrite_mode'; // 'all' | 'empty'
+let overwriteMode = G(OVERWRITE_KEY, 'empty');
+
+const owWrap = document.createElement('label');
+owWrap.style.cssText='display:flex;align-items:center;gap:6px;margin-left:8px;font-size:12px;opacity:.95';
+const owCb = document.createElement('input');
+owCb.type='checkbox';
+owCb.checked = (overwriteMode === 'all');
+const owTxt = document.createElement('span');
+owTxt.textContent = 'Erstatt alle fliser (ellers kun tomme)';
+owWrap.append(owCb, owTxt);
+body.insertBefore(owWrap, drop);
+
+owCb.onchange = () => {
+  overwriteMode = owCb.checked ? 'all' : 'empty';
+  S(OVERWRITE_KEY, overwriteMode);
+  showToast('Erstatt-modus', overwriteMode === 'all' ? 'Erstatt alle' : 'Kun tomme fliser');
+  if (_lastPreview) { log.textContent=''; previewPlannedPlacements(_lastPreview); }
+};
+
+function syncReuseWithAddExtra(){
+  // Når add-extra er AV: tving gjenbruk PÅ (sunn default)
+  if(!addExtraSizes){
+    reuseAssets = true;
+    reuseCb.checked = true;
+    reuseCb.disabled = true;
+    reuseTxt.textContent = 'Fyll alle størrelser (gjenbruk bilder/scripts) (påkrevd når "legg til" er av)';
+    S(REUSE_KEY_NEW, reuseAssets);
+  }else{
+    reuseCb.disabled = false;
+    reuseTxt.textContent = 'Fyll alle størrelser (gjenbruk bilder/scripts)';
+  }
+}
+
+addCb.onchange = () => {
+  addExtraSizes = addCb.checked;
+  S(ADD_KEY, addExtraSizes);
+  syncReuseWithAddExtra();
+  showToast('Legg til ekstra', addExtraSizes ? 'På (kan legge til fliser)' : 'Av');
+  if (_lastPreview) { log.textContent=''; previewPlannedPlacements(_lastPreview); }
+};
+syncReuseWithAddExtra(); // init
+
+const reuseImages = () => reuseAssets;
 
 /* ========= image helpers ========= */
 function getTileDropzoneInput(tile){return tile.querySelector('input[type="file"]')||null}
@@ -757,9 +813,83 @@ function tagLabel(entry){
   if (typeof entry === 'string') return entry.slice(0,60) + (entry.length>60?'…':'');
   return entry.name ? entry.name : '(uten navn)';
 }
+
+// Plan for "legg til ekstra størrelser":
+// - Bare når addExtraSizes==true
+// - Bare når reuseAssets==false (ellers gir det sjelden mening)
+// - Bare for størrelser som finnes i CSV (failsafe)
+function countPlannedAdds(byId){
+  const pools = buildTagPools(mapping);
+  const planned = new Map(); // id -> [{size,variant,need}]
+  const reuse = reuseAssets;
+
+  for(const [id, arr] of byId.entries()){
+    // count current tiles per size|variant|side
+    const tileCounts = new Map();
+    for(const e of arr){
+      const key = `${e.size}|${e.variant||''}|${e.side||''}`;
+      tileCounts.set(key, (tileCounts.get(key)||0) + 1);
+    }
+
+    // count scripts available per size|variant (line-aware preferred, then global)
+    const uniqSizes = new Map(); // key size|variant -> {size,variant}
+    for(const e of arr){
+      const k = `${e.size}|${e.variant||''}`;
+      if(!uniqSizes.has(k)) uniqSizes.set(k, {size:e.size,variant:e.variant||null});
+    }
+
+    const adds=[];
+    for(const sv of uniqSizes.values()){
+      // scripts for this line+size(+variant), fallback to size only, then global
+      const exactLine = pools.getExact(id, sv.size, sv.variant||null);
+      const sizeLine  = pools.getSize(id, sv.size);
+      const exactAny  = pools.getExact(null, sv.size, sv.variant||null);
+      const sizeAny   = pools.getSize(null, sv.size);
+
+      const list = (pools.hasLineIds
+        ? (exactLine.length ? exactLine : (sizeLine.length ? sizeLine : (exactAny.length ? exactAny : sizeAny)))
+        : (exactAny.length ? exactAny : sizeAny)
+      );
+
+      const scriptsCount = list?.length || 0;
+
+      // Hvor mange fliser finnes? Vi bruker sum av alle sides for samme size|variant
+      let tilesCount = 0;
+      for(const [k,n] of tileCounts.entries()){
+        const [sz,vr] = k.split('|');
+        if(sz===sv.size && (vr||'')===(sv.variant||'')) tilesCount += n;
+      }
+
+      // Only meaningful if addExtraSizes ON and reuse OFF
+      if(addExtraSizes && !reuse){
+        const need = Math.max(0, scriptsCount - tilesCount);
+        if(need>0) adds.push({size:sv.size,variant:sv.variant||null,need});
+      }
+    }
+
+    if(adds.length) planned.set(id, adds);
+  }
+
+  return planned;
+}
+
 function previewPlannedPlacements(byId) {
   const pools = buildTagPools(mapping);
-  LOG(`Modus: ${pools.hasLineIds ? 'Linje-spesifikk (ID i CSV).' : 'Global (ingen linje-ID i CSV).'}`);
+  const reuse = reuseAssets;
+
+  LOG(`Modus: ${pools.hasLineIds ? 'Linje-spesifikk (ID i CSV).' : 'Global (ingen linje-ID i CSV).'}  •  Erstatt: ${overwriteMode==='all'?'alle':'kun tomme'}  •  Gjenbruk: ${reuse?'på':'av'}  •  Legg til ekstra: ${addExtraSizes?'på':'av'}`);
+
+  const plannedAdds = countPlannedAdds(byId);
+  let addTotal = 0;
+  plannedAdds.forEach(v=>v.forEach(x=>addTotal+=x.need));
+  if(addTotal){
+    LOG(`\nPLAN: Legg til ekstra fliser totalt: ${addTotal}`);
+    for(const [id, adds] of plannedAdds.entries()){
+      const txt = adds.map(a=>`${a.size}${a.variant?'/'+a.variant:''}×${a.need}`).join(', ');
+      LOG(`  • ${id}: ${txt}`);
+    }
+    LOG('');
+  }
 
   for (const [id, arr] of byId.entries()) {
     const groups = new Map();
@@ -781,7 +911,7 @@ function previewPlannedPlacements(byId) {
 
       if (imgs.length) {
         const lines = tiles.map((_, i) => {
-          const f = reuseAssets ? imgs[i % imgs.length] : (i < imgs.length ? imgs[i] : null);
+          const f = reuse ? imgs[i % imgs.length] : (i < imgs.length ? imgs[i] : null);
           return f ? `flis#${i+1} ← ${fileName(f)}` : `flis#${i+1} ← (ingen bilde)`;
         });
         LOG(`   • ${label}  (bilder) ${tiles.length} flis(er)\n      ${lines.join('\n      ')}`);
@@ -789,26 +919,19 @@ function previewPlannedPlacements(byId) {
       }
 
       let poolItems = pools.getExact(id, entry.size, entry.variant || null);
-      let poolLabel = poolItems.length
-        ? (pools.maps.tagsByExactLine.has(pools.kExact(id, entry.size, entry.variant || null)) ? 'script linje:eksakt' : 'script global:eksakt')
-        : '';
-
-      if (!poolItems.length) {
-        poolItems = pools.getSize(id, entry.size);
-        poolLabel = poolItems.length
-          ? (pools.maps.tagsBySizeLine.has(pools.kSize(id, entry.size)) ? 'script linje:størrelse' : 'script global:størrelse')
-          : '';
-      }
+      if (!poolItems.length) poolItems = pools.getSize(id, entry.size);
+      if (!poolItems.length) poolItems = pools.getExact(null, entry.size, entry.variant || null);
+      if (!poolItems.length) poolItems = pools.getSize(null, entry.size);
 
       if (!poolItems.length) { LOG(`   • ${label}  (ingen match på bilder eller scripts)`); continue; }
 
       const lines = tiles.map((_, i) => {
-        const payload = reuseAssets ? poolItems[i % poolItems.length] : (i < poolItems.length ? poolItems[i] : null);
+        const payload = reuse ? poolItems[i % poolItems.length] : (i < poolItems.length ? poolItems[i] : null);
         const nice = payload ? tagLabel(payload) : '(ingen script)';
         return `flis#${i+1} ← ${nice}`;
       });
 
-      LOG(`   • ${label}  (scripts) ${tiles.length} flis(er)  pool=${poolLabel}\n      ${lines.join('\n      ')}`);
+      LOG(`   • ${label}  (scripts) ${tiles.length} flis(er)\n      ${lines.join('\n      ')}`);
     }
   }
 }
@@ -905,6 +1028,101 @@ btnRun.onclick=()=>{
   runOnIds(ids)
 };
 
+/* ========= (BEST EFFORT) add extra tiles =========
+   NOTE: UI i EasyPoint/AdPoint kan variere. Dette er en “failsafe”:
+   - Vi prøver KUN å legge til når addExtraSizes==true og reuseAssets==false
+   - Vi prøver KUN størrelser som finnes i CSV-mappingen (vi legger ikke til “ukjente”)
+   - Hvis vi ikke finner riktig UI, logger vi og fortsetter uten å kræsje.
+*/
+function findOptionalMaterialArea(){
+  const needles = ['valgfri materiell','optional material','legg til'];
+  const blocks = [...document.querySelectorAll('div,section,aside')].filter(el=>vis(el));
+  for(const b of blocks){
+    const t=(b.innerText||'').toLowerCase();
+    if(needles.some(n=>t.includes(n))) return b;
+  }
+  return document.body;
+}
+async function tryAddTileOfSize(sizeStr){
+  // sizeStr like "980x300" (already normalized lower)
+  const sizePretty = sizeStr.replace('x','×');
+  const root = findOptionalMaterialArea();
+
+  // Find a button that looks like "Legg til" / "Add"
+  const addBtns = [...root.querySelectorAll('button')].filter(vis).filter(b=>{
+    const t=(b.innerText||'').toLowerCase().trim();
+    return /legg\s*til|add/.test(t);
+  });
+
+  // Find a select/combobox near
+  const candidates = [];
+  for(const b of addBtns){
+    const wrap = b.closest('div') || root;
+    const combos = [...wrap.querySelectorAll('[role="combobox"], select, input')].filter(vis);
+    candidates.push({btn:b, combos, wrap});
+  }
+
+  // Try to open combobox and pick matching option containing "980x300" or "980×300"
+  for(const c of candidates){
+    const combo = c.combos.find(x=>x.matches('[role="combobox"]')) || c.combos.find(x=>x.tagName==='SELECT') || c.combos.find(x=>x.tagName==='INPUT');
+    if(!combo) continue;
+
+    // SELECT case
+    if(combo.tagName==='SELECT'){
+      const opts=[...combo.querySelectorAll('option')];
+      const hit=opts.find(o=>cs(o.textContent||'')===sizeStr || cs(o.value||'')===sizeStr || cs(o.textContent||'').includes(sizeStr));
+      if(!hit) continue;
+      combo.value = hit.value;
+      combo.dispatchEvent(new Event('input',{bubbles:true}));
+      combo.dispatchEvent(new Event('change',{bubbles:true}));
+      await sleep(80);
+      c.btn.click();
+      await sleep(450);
+      return true;
+    }
+
+    // Combobox/input case: click to open menu
+    try{
+      combo.scrollIntoView({block:'center'});
+      combo.click();
+      await sleep(160);
+    }catch{}
+
+    // Search menu items
+    const menu = await waitFor(()=>{
+      const m = document.querySelector('[role="listbox"], .MuiPopover-root, .MuiMenu-list, [role="presentation"]');
+      return m && vis(m) ? m : null;
+    }, 1200, 60);
+
+    if(!menu) continue;
+
+    const items = [...menu.querySelectorAll('[role="option"], li, button, div')].filter(vis);
+    const hit = items.find(it=>{
+      const t = cs(it.innerText||it.textContent||'');
+      return t.includes(sizeStr) || t.includes(cs(sizePretty));
+    });
+
+    if(!hit){
+      // close menu (escape)
+      document.dispatchEvent(new KeyboardEvent('keydown', {bubbles:true, key:'Escape'}));
+      document.dispatchEvent(new KeyboardEvent('keyup',   {bubbles:true, key:'Escape'}));
+      await sleep(80);
+      continue;
+    }
+
+    hit.scrollIntoView({block:'center'});
+    hit.click();
+    await sleep(120);
+
+    c.btn.scrollIntoView({block:'center'});
+    c.btn.click();
+    await sleep(500);
+    return true;
+  }
+
+  return false;
+}
+
 async function runOnIds(ids){
   stopping=false;
   btnRun.disabled=true; btnStop.disabled=false; btnScan.disabled=true;
@@ -934,6 +1152,7 @@ async function runOnIds(ids){
         liveEntries = liveEntries.concat(sizesFromExpanded(det));
       }
 
+      // unique sizes (we keep variant/side in entries scan)
       const uniq=new Map();
       for(const e of liveEntries){
         const k=`${e.size}|${e.variant||''}|${e.side||''}`;
@@ -945,6 +1164,91 @@ async function runOnIds(ids){
       if(!entries.length){stats.skip++;stats.done++;setInfo(stats);continue}
 
       let wrote=false;
+
+      // --- Optional: add extra tiles if needed (only if addExtraSizes ON and reuse OFF) ---
+      if(addExtraSizes && !reuseAssets && mapping.length){
+        // count current tiles per size|variant (ignoring side)
+        const tileCountBySV = new Map();
+        for(const det of detailsList){
+          const tiles = getAllTiles(det);
+          for(const t of tiles){
+            // try infer size from text/label
+            const txt = (t.innerText||'') + ' ' + groupLabel(tileGroup(t));
+            const m = txt.match(/(\d{2,4})\s*[x×]\s*(\d{2,4})/i);
+            if(!m) continue;
+            const sz = cs(`${m[1]}x${m[2]}`);
+            const vr = tileVariant(t)||'';
+            const key = `${sz}|${vr}`;
+            tileCountBySV.set(key, (tileCountBySV.get(key)||0)+1);
+          }
+        }
+
+        // For every mapping row that targets this line, consider size/variant need
+        // We'll compute needed = scriptsCount - tileCount (per size/variant), only if size exists in page list (we try)
+        const needList = [];
+        // Gather unique size/variant from pools list for this line
+        const lineKeys = new Map(); // key size|variant -> scriptsCount
+        // from exact maps
+        for(const m of (mapping||[])){
+          const ids = (m.lineIds||[]).map(String);
+          if(ids.length && !ids.includes(String(id))) continue; // line scoped and not ours
+          if(!m.size || !m.tag) continue;
+          const k = `${m.size}|${m.variant||''}`;
+          lineKeys.set(k, (lineKeys.get(k)||0)+1);
+        }
+
+        for(const [k, scriptsCount] of lineKeys.entries()){
+          const tilesCount = tileCountBySV.get(k)||0;
+          const need = Math.max(0, scriptsCount - tilesCount);
+          if(need>0){
+            const [sz] = k.split('|');
+            needList.push({key:k, size:sz, need});
+          }
+        }
+
+        if(needList.length){
+          LOG(`   · Legg-til plan (${id}): ` + needList.map(x=>`${x.size}×${x.need}`).join(', '));
+          for(const x of needList){
+            if(stopping) break;
+            // failsafe: only add if size is in CSV mapping (it is, because we built from mapping)
+            for(let n=0;n<x.need;n++){
+              if(stopping) break;
+              await ensureCampaignView();
+              await waitForIdle();
+
+              const ok = await tryAddTileOfSize(x.size);
+              if(!ok){
+                LOG(`   ! Klarte ikke å legge til ${x.size} (fant ikke UI/valget). Fortsetter uten å legge til.`);
+                break;
+              }else{
+                LOG(`   + La til flis: ${x.size}`);
+              }
+
+              // Re-scan tiles mounted after add
+              await sleep(500);
+              await ensureAllTilesMounted(d);
+            }
+          }
+
+          // Rebuild detailsList entries after adds (best effort)
+          liveEntries = [];
+          for(const r of rowsForId){
+            if(stopping) break;
+            await ensureCampaignView();
+            const det = await expandRow(r);
+            await waitForIdle();
+            await ensureAllTilesMounted(det || d);
+            await sleep(80);
+            liveEntries = liveEntries.concat(sizesFromExpanded(det));
+          }
+          const uniq2=new Map();
+          for(const e of liveEntries){
+            const k2=`${e.size}|${e.variant||''}|${e.side||''}`;
+            if(!uniq2.has(k2)) uniq2.set(k2,{size:e.size,variant:e.variant,side:e.side})
+          }
+          entries.length=0; entries.push(...uniq2.values());
+        }
+      }
 
       for(const entry of entries){
         if(stopping) break;
@@ -964,7 +1268,7 @@ async function runOnIds(ids){
         }
 
         if (!tiles.length) {
-          LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''} (ingen størrelser)`);
+          LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''} (ingen matchende fliser)`);
           continue;
         }
 
@@ -975,7 +1279,7 @@ async function runOnIds(ids){
           for (let i = 0; i < tiles.length; i++) {
             if(stopping) break;
             const t = tiles[i];
-            const f = reuseImages ? imgs[i % imgs.length] : (i < imgs.length ? imgs[i] : null);
+            const f = reuseImages() ? imgs[i % imgs.length] : (i < imgs.length ? imgs[i] : null);
             if (!f) continue;
 
             t.scrollIntoView({ block: 'center' });
@@ -994,15 +1298,14 @@ async function runOnIds(ids){
         const exactAny  = pools.getExact(null, entry.size, entry.variant || null);
         const sizeAny   = pools.getSize(null, entry.size);
 
-        let list, pool;
+        let list;
         if (pools.hasLineIds) {
-          if (exactLine.length) { list = exactLine; pool = 'linje:eksakt'; }
-          else if (sizeLine.length) { list = sizeLine; pool = 'linje:størrelse'; }
-          else if (exactAny.length) { list = exactAny; pool = 'global:eksakt'; }
-          else { list = sizeAny; pool = 'global:størrelse'; }
+          if (exactLine.length) list = exactLine;
+          else if (sizeLine.length) list = sizeLine;
+          else if (exactAny.length) list = exactAny;
+          else list = sizeAny;
         } else {
           list = exactAny.length ? exactAny : sizeAny;
-          pool = exactAny.length ? 'global:eksakt' : 'global:størrelse';
         }
 
         if (!list || !list.length) {
@@ -1010,7 +1313,7 @@ async function runOnIds(ids){
           continue;
         }
 
-        LOG(`   • ${entry.size}${entry.variant?('/'+entry.variant):''}  størrelser=${tiles.length}, pool=${pool}, scripts=${list.length}`);
+        LOG(`   • ${entry.size}${entry.variant?('/'+entry.variant):''}  fliser=${tiles.length}, scripts=${list.length}`);
 
         let used = 0, skipped = 0;
 
@@ -1028,6 +1331,12 @@ async function runOnIds(ids){
 
           const editor = await open3PTab();
           if (!editor) { LOG('   ! Fant ikke 3rd-party editor'); stats.err++; continue; }
+
+          // Overwrite policy
+          if (overwriteMode === 'empty') {
+            const current = getEditorValue(editor);
+            if (!isEmpty3PValue(current)) { skipped++; continue; }
+          }
 
           const tagStr = (typeof payload === 'string') ? payload : (payload?.tag || '');
           const pasted = await pasteWithVerify(editor, tagStr, 2);
@@ -1116,4 +1425,3 @@ async function waitForIdle(timeout=12000){
 }
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
-
