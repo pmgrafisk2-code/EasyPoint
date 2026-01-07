@@ -605,7 +605,7 @@ const owCb = document.createElement('input');
 owCb.type='checkbox';
 owCb.checked = (overwriteMode === 'all');
 const owTxt = document.createElement('span');
-owTxt.textContent = 'Erstatt alle fliser (ellers kun tomme)';
+owTxt.textContent = 'Erstatt alle fliser';
 owWrap.append(owCb, owTxt);
 body.insertBefore(owWrap, drop);
 
@@ -1425,5 +1425,6 @@ async function waitForIdle(timeout=12000){
 }
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
+
 
 
