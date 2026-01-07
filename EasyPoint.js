@@ -622,11 +622,11 @@ function syncReuseWithAddExtra(){
     reuseAssets = true;
     reuseCb.checked = true;
     reuseCb.disabled = true;
-    reuseTxt.textContent = 'Fyll alle størrelser (gjenbruk bilder/scripts) (påkrevd når "legg til" er av)';
+    reuseTxt.textContent = 'Gjenbruk';
     S(REUSE_KEY_NEW, reuseAssets);
   }else{
     reuseCb.disabled = false;
-    reuseTxt.textContent = 'Fyll alle størrelser (gjenbruk bilder/scripts)';
+    reuseTxt.textContent = 'Gjenbruk';
   }
 }
 
@@ -1425,4 +1425,5 @@ async function waitForIdle(timeout=12000){
 }
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
+
 
