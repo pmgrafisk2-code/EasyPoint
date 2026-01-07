@@ -567,7 +567,7 @@ const reuseCb = document.createElement('input');
 reuseCb.type='checkbox';
 reuseCb.checked = reuseAssets;
 const reuseTxt = document.createElement('span');
-reuseTxt.textContent = 'Fyll alle fliser (gjenbruk bilder/scripts)';
+reuseTxt.textContent = 'Fyll alle størrelser (gjenbruk bilder/scripts)';
 reuseWrap.append(reuseCb, reuseTxt);
 body.insertBefore(reuseWrap, drop);
 
@@ -579,7 +579,7 @@ reuseCb.onchange = () => {
   showToast('Modus endret', reuseAssets ? 'Gjenbruk på' : 'Gjenbruk av');
   if (_lastPreview) {
     log.textContent = '';
-    LOG(`Modus: ${reuseAssets ? 'Gjenbruk for å fylle alle fliser' : "Ikke gjenbruk (bruk hver kun én gang)"}`);
+    LOG(`Modus: ${reuseAssets ? 'Gjenbruk for å fylle alle størrelser' : "Ikke gjenbruk (bruk hver kun én gang)"}`);
     previewPlannedPlacements(_lastPreview);
   }
 };
@@ -770,7 +770,7 @@ function previewPlannedPlacements(byId) {
     }
 
     LOG(`→ Forhåndsvis ${id}`);
-    if (!groups.size) { LOG('   (ingen fliser funnet)'); continue; }
+    if (!groups.size) { LOG('   (ingen størrelser funnet)'); continue; }
 
     for (const { entry, tiles } of groups.values()) {
       const label = [entry.size, entry.variant, entry.side].filter(Boolean).join('/');
@@ -964,7 +964,7 @@ async function runOnIds(ids){
         }
 
         if (!tiles.length) {
-          LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''} (ingen fliser)`);
+          LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''} (ingen størrelser)`);
           continue;
         }
 
@@ -1010,7 +1010,7 @@ async function runOnIds(ids){
           continue;
         }
 
-        LOG(`   • ${entry.size}${entry.variant?('/'+entry.variant):''}  fliser=${tiles.length}, pool=${pool}, scripts=${list.length}`);
+        LOG(`   • ${entry.size}${entry.variant?('/'+entry.variant):''}  størrelser=${tiles.length}, pool=${pool}, scripts=${list.length}`);
 
         let used = 0, skipped = 0;
 
@@ -1116,3 +1116,4 @@ async function waitForIdle(timeout=12000){
 }
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
+
