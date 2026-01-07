@@ -12,11 +12,8 @@ function prettyCounts(entries){const counts=new Map();for(const e of entries){co
 
 /* ========= version keys & line-id ========= */
 function versionKey(str){const s=String(str||'').toLowerCase();const mIx=s.match(/\bix[-_][0-9a-z-]+\b/i);if(mIx) return mIx[0];const mV=s.match(/\b(?:ver|v)[\s._-]?(\d{1,3})\b/i);if(mV) return `v${mV[1]}`;return null}
-// Find ALL line IDs like "... L1173675 ..." anywhere in the name
-// Extract ALL line IDs anywhere in the string, tolerant to spacing/underscore
 function extractLineIds(str){
   const ids = new Set();
-  // L + optional spaces/nbsp/_/- then 6–10 digits; stop before another digit
   const re = /L[\s\u00A0_-]*?(\d{6,10})(?!\d)/gi;
   const s = String(str || '');
   let m;
@@ -36,47 +33,47 @@ async function ensureAllTilesMounted(root = d){
 
   let prev = -1, still = 0;
   for (let i = 0; i < 32 && still < 3; i++) {
-    scroller.scrollBy(0, 1e6);           // jump down
+    scroller.scrollBy(0, 1e6);
     await sleep(300);
     const count = d.querySelectorAll('.set-creativeTile').length;
     if (count === prev) still++; else { prev = count; still = 0; }
   }
-  scroller.scrollTo(0, 0);               // return to top
+  scroller.scrollTo(0, 0);
 }
-
-
-
 
 /* ========= image side helpers ========= */
 function detectSide(str){const s=(str||'').toLowerCase().replace('høyre','hoyre');if(/\b(hoyre|right|r)\b/.test(s))return'right';if(/\b(venstre|left|l)\b/.test(s))return'left';return null}
 
 /* ========= tile helpers ========= */
 function tileClickTargets(tile){
-  // Prefer label/text areas over the media/thumbnail area (thumbnail often opens preview)
   return [
-    tile.querySelector('.set-cardLabel__main'),          // best: label main
-    tile.querySelector('.set-cardLabel'),               // label container
-    tile.querySelector('.MuiTypography-root'),          // any visible text area
-    tile.querySelector('[aria-label*="select" i]'),      // if they have a dedicated select control
-    tile                                                     // fallback
+    tile.querySelector('.set-cardLabel__main'),
+    tile.querySelector('.set-cardLabel'),
+    tile.querySelector('.MuiTypography-root'),
+    tile.querySelector('[aria-label*="select" i]'),
+    tile
   ].filter(Boolean);
+}
+
+function isTileSelected(tile){
+  if(tile.classList.contains('set-creativeTile__selected'))return true;
+  if(tile.getAttribute('aria-selected')==='true')return true;
+  if(tile.closest('[aria-selected="true"]'))return true;
+  if(tile.closest('.set-creativeTile__selected'))return true;
+  return false;
 }
 
 async function selectTile(tile){
   if (!tile) return false;
-
-  // If already selected, we’re done
   if (isTileSelected(tile)) return true;
 
   const targets = tileClickTargets(tile);
 
-  // Try a few times (MUI sometimes ignores the first click when busy)
   for (let attempt = 0; attempt < 3; attempt++) {
     for (const t of targets) {
       if (isTileSelected(tile)) return true;
 
       try { t.scrollIntoView({ block: 'center' }); } catch {}
-      // Click sequence that tends to trigger selection without "opening"
       t.dispatchEvent(new MouseEvent('pointerdown', { bubbles:true }));
       t.dispatchEvent(new MouseEvent('mousedown',  { bubbles:true }));
       t.dispatchEvent(new MouseEvent('mouseup',    { bubbles:true }));
@@ -88,7 +85,6 @@ async function selectTile(tile){
       }
     }
 
-    // Keyboard fallback: focus tile and press Space (often "selects" without navigation)
     try {
       tile.scrollIntoView({ block:'center' });
       tile.focus?.();
@@ -101,26 +97,66 @@ async function selectTile(tile){
       if (isTileSelected(tile)) return true;
     }
   }
-
   return isTileSelected(tile);
 }
 
-function isTileSelected(tile){if(tile.classList.contains('set-creativeTile__selected'))return true;if(tile.getAttribute('aria-selected')==='true')return true;if(tile.closest('[aria-selected="true"]'))return true;if(tile.closest('.set-creativeTile__selected'))return true;return false}
 function getAllTiles(details){
   let tiles = [...details.querySelectorAll('.set-creativeTile, .set-creativeTile__selected')];
-  // only keep top-level tiles (no nested dups)
   return tiles.filter(t => !tiles.some(o => o !== t && o.contains(t)));
 }
 function tileGroup(tile){return tile.closest('.set-creativeContainer, .set-creativeSectionContainer')||tile.parentElement}
-function groupLabel(group){const n=group&&(group.querySelector('.set-cardLabel__main [title]')||group.querySelector('.set-cardLabel__main div[title]')||group.querySelector('.set-cardLabel__main'));return(n?.getAttribute?.('title')||n?.textContent||'')||''}
+function groupLabel(group){
+  const n=group&&(group.querySelector('.set-cardLabel__main [title]')||group.querySelector('.set-cardLabel__main div[title]')||group.querySelector('.set-cardLabel__main'));
+  return(n?.getAttribute?.('title')||n?.textContent||'')||''
+}
 function tileVariant(tile){const lbl=groupLabel(tileGroup(tile)).toLowerCase();if(/desktop/.test(lbl))return'desktop';if(/mobil|mobile/.test(lbl))return'mobil';return null}
 function tileSide(tile){return detectSide(groupLabel(tileGroup(tile)))}
-function tileHasSize(tile,size){const rx=new RegExp(`\\b${size.replace('x','[x×]')}\\b`,'i');if(rx.test((tile.innerText||'')))return true;const lbl=groupLabel(tileGroup(tile));const mappedRe=new RegExp(`mapped_${size.replace('x','[x×]')}(?:\\b|[_-])`,'i');if(mappedRe.test(lbl))return true;if(rx.test(lbl))return true;return false}
+function tileHasSize(tile,size){
+  const rx=new RegExp(`\\b${size.replace('x','[x×]')}\\b`,'i');
+  if(rx.test((tile.innerText||'')))return true;
+  const lbl=groupLabel(tileGroup(tile));
+  const mappedRe=new RegExp(`mapped_${size.replace('x','[x×]')}(?:\\b|[_-])`,'i');
+  if(mappedRe.test(lbl))return true;
+  if(rx.test(lbl))return true;
+  return false;
+}
 
 /* ========= mapping import (CSV/JSON + Excel paste + DnD) ========= */
-function parseCSV(text){let rows=[],row=[],f='',q=false;const first=(text.split(/\r?\n/).find(l=>l.trim().length>0)||'');const c1=(first.match(/,/g)||[]).length,c2=(first.match(/;/g)||[]).length,c3=(first.match(/\t/g)||[]).length;const del=c3>=c2&&c3>=c1?'\t':(c2>c1?';':',');for(let i=0;i<text.length;i++){const ch=text[i];if(ch=='"'){if(q&&text[i+1]=='"'){f+='"';i++}else q=!q}else if(!q&&ch===del){row.push(f);f=''}else if(!q&&ch=='\n'){row.push(f);rows.push(row);row=[];f=''}else if(!q&&ch=='\r'){}else f+=ch}row.push(f);rows.push(row);return rows}
-function pickHeader(h,names){const L=h.map(x=>String(x||'').toLowerCase());for(const n of names){let i=L.indexOf(n);if(i>-1)return i;for(let k=0;k<L.length;k++) if(L[k].includes(n)) return k}return -1}
-function rowsToMap(rows){let head=[],headRow=0;for(let i=0;i<Math.min(rows.length,5);i++){const cells=(rows[i]||[]).map(c=>String(c||'').trim());if(cells.join('').length){head=cells;headRow=i;break}}const sizeIdx=pickHeader(head,['størrelse','stoerrelse','size']);const nameIdx=pickHeader(head,['creative name','creative','name','navn']);const tagIdx=pickHeader(head,['secure content','script','tag','kode','code']);if(tagIdx<0||(sizeIdx<0&&nameIdx<0))throw new Error('Missing columns: Secure Content + (Size or Creative Name)'); let warned=false; const out=[];
+function parseCSV(text){
+  let rows=[],row=[],f='',q=false;
+  const first=(text.split(/\r?\n/).find(l=>l.trim().length>0)||'');
+  const c1=(first.match(/,/g)||[]).length,c2=(first.match(/;/g)||[]).length,c3=(first.match(/\t/g)||[]).length;
+  const del=c3>=c2&&c3>=c1?'\t':(c2>c1?';':',');
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(ch=='"'){if(q&&text[i+1]=='"'){f+='"';i++}else q=!q}
+    else if(!q&&ch===del){row.push(f);f=''}
+    else if(!q&&ch=='\n'){row.push(f);rows.push(row);row=[];f=''}
+    else if(!q&&ch=='\r'){}
+    else f+=ch
+  }
+  row.push(f);rows.push(row);
+  return rows
+}
+function pickHeader(h,names){
+  const L=h.map(x=>String(x||'').toLowerCase());
+  for(const n of names){
+    let i=L.indexOf(n);if(i>-1)return i;
+    for(let k=0;k<L.length;k++) if(L[k].includes(n)) return k
+  }
+  return -1
+}
+function rowsToMap(rows){
+  let head=[],headRow=0;
+  for(let i=0;i<Math.min(rows.length,5);i++){
+    const cells=(rows[i]||[]).map(c=>String(c||'').trim());
+    if(cells.join('').length){head=cells;headRow=i;break}
+  }
+  const sizeIdx=pickHeader(head,['størrelse','stoerrelse','size']);
+  const nameIdx=pickHeader(head,['creative name','creative','name','navn']);
+  const tagIdx=pickHeader(head,['secure content','script','tag','kode','code']);
+  if(tagIdx<0||(sizeIdx<0&&nameIdx<0))throw new Error('Missing columns: Secure Content + (Size or Creative Name)');
+  let warned=false; const out=[];
   for(let r=headRow+1;r<rows.length;r++){
     const cells = rows[r] || [];
     const rawSize = sizeIdx>-1 ? (cells[sizeIdx]||'') : '';
@@ -133,9 +169,7 @@ function rowsToMap(rows){let head=[],headRow=0;for(let i=0;i<Math.min(rows.lengt
     const name   = rawName || '';
     const vkey   = versionKey(rawName);
 
-    // primary: from Creative Name
     let lineIds = extractLineIds(rawName);
-    // fallback: scan the entire row text if none found
     if (!lineIds.length){
       const rowText = cells.map(c => String(c||'')).join(' _ ');
       lineIds = extractLineIds(rowText);
@@ -145,7 +179,6 @@ function rowsToMap(rows){let head=[],headRow=0;for(let i=0;i<Math.min(rows.lengt
       LOG('! CSV warning: Size column disagrees with Creative Name — trusting the Size column.');
       warned = true;
     }
-
     if (size && tag) out.push({ size, variant, tag, name, vkey, lineIds });
   }
   return out;
@@ -178,21 +211,158 @@ function normalizeJSON(arr){
 
 /* ========= line items ========= */
 function normLabel(s){return String(s||'').toLowerCase().replace(/\s+/g,' ').trim()}
-function findRows(){const rows=[...d.querySelectorAll('tr.set-matSpecDataRow')].filter(vis);return rows.filter(el=>!rows.some(o=>o!==el&&o.contains(el)))}
-function getHeaderIdxForRow(row){const table=row.closest('table');if(!table) return{lineItemIdx:-1,rosenrIdx:-1};if(table._ap3p_headerIdx) return table._ap3p_headerIdx;const ths=[...(table.tHead?.querySelectorAll('th')||[])];let lineItemIdx=-1,rosenrIdx=-1;ths.forEach((th,i)=>{const t=normLabel(th.textContent);if(lineItemIdx===-1&&/(^|\s)line\s*item(\s|$)/.test(t)) lineItemIdx=i;if(rosenrIdx===-1&&(/rosenr/.test(t)||(/materiell/.test(t)&&/rosenr/.test(t)))) rosenrIdx=i});table._ap3p_headerIdx={lineItemIdx,rosenrIdx};return table._ap3p_headerIdx}
-function rowId(row){const {lineItemIdx,rosenrIdx}=getHeaderIdxForRow(row);const tds=[...row.querySelectorAll('td')];if(lineItemIdx>-1&&tds[lineItemIdx]){const txt=tds[lineItemIdx].textContent.trim();const m=txt.match(/\d{6,10}/);return(m&&m[0])||(txt||'?')}const rosenVal=(rosenrIdx>-1&&tds[rosenrIdx])?tds[rosenrIdx].textContent.trim():'';const nums=tds.map(td=>td.textContent.trim()).filter(t=>/^\d{6,10}$/.test(t));const hit=nums.find(n=>n!==rosenVal);return hit||nums[0]||'?'}
+function findRows(){
+  const rows=[...d.querySelectorAll('tr.set-matSpecDataRow')].filter(vis);
+  return rows.filter(el=>!rows.some(o=>o!==el&&o.contains(el)))
+}
+function getHeaderIdxForRow(row){
+  const table=row.closest('table');
+  if(!table) return{lineItemIdx:-1,rosenrIdx:-1};
+  if(table._ap3p_headerIdx) return table._ap3p_headerIdx;
+  const ths=[...(table.tHead?.querySelectorAll('th')||[])];
+  let lineItemIdx=-1,rosenrIdx=-1;
+  ths.forEach((th,i)=>{
+    const t=normLabel(th.textContent);
+    if(lineItemIdx===-1&&/(^|\s)line\s*item(\s|$)/.test(t)) lineItemIdx=i;
+    if(rosenrIdx===-1&&(/rosenr/.test(t)||(/materiell/.test(t)&&/rosenr/.test(t)))) rosenrIdx=i
+  });
+  table._ap3p_headerIdx={lineItemIdx,rosenrIdx};
+  return table._ap3p_headerIdx
+}
+function rowId(row){
+  const {lineItemIdx,rosenrIdx}=getHeaderIdxForRow(row);
+  const tds=[...row.querySelectorAll('td')];
+  if(lineItemIdx>-1&&tds[lineItemIdx]){
+    const txt=tds[lineItemIdx].textContent.trim();
+    const m=txt.match(/\d{6,10}/);
+    return(m&&m[0])||(txt||'?')
+  }
+  const rosenVal=(rosenrIdx>-1&&tds[rosenrIdx])?tds[rosenrIdx].textContent.trim():'';
+  const nums=tds.map(td=>td.textContent.trim()).filter(t=>/^\d{6,10}$/.test(t));
+  const hit=nums.find(n=>n!==rosenVal);
+  return hit||nums[0]||'?'
+}
 function findRowsByIdAll(targetId){return findRows().filter(r=>rowId(r)===targetId)}
-async function expandRow(row){if(!row) return null;row.scrollIntoView({block:'center'});row.dispatchEvent(new MouseEvent('pointerdown',{bubbles:true}));row.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));row.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));row.click();await sleep(120);row.click();await sleep(160);for(let i=0;i<14;i++){const sib=row.nextElementSibling;if(sib&&(sib.querySelector('.set-creativeSectionContainer, .set-creativeContainer'))) return sib;await sleep(90)}return row.nextElementSibling||null}
+async function expandRow(row){
+  if(!row) return null;
+  row.scrollIntoView({block:'center'});
+  row.dispatchEvent(new MouseEvent('pointerdown',{bubbles:true}));
+  row.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));
+  row.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));
+  row.click();
+  await sleep(120);
+  row.click();
+  await sleep(160);
+  for(let i=0;i<14;i++){
+    const sib=row.nextElementSibling;
+    if(sib&&(sib.querySelector('.set-creativeSectionContainer, .set-creativeContainer'))) return sib;
+    await sleep(90)
+  }
+  return row.nextElementSibling||null
+}
 
 /* ========= detect placeholders ========= */
-function sizesFromExpanded(details){if(!details) return[];const entries=[];const tiles=getAllTiles(details);function findSizeInText(s){const m=String(s||'').match(/(\d{2,4})\s*[x×]\s*(\d{2,4})/i);return m?`${m[1]}x${m[2]}`:''}function findSizeInMapped(lbl){const m=String(lbl||'').match(/mapped_(\d{2,4})\s*[x×]\s*(\d{2,4})(?:\b|[_\s])/i);return m?`${m[1]}x${m[2]}`:''}for(const tile of tiles){const text=(tile.innerText||'');const lbl=groupLabel(tileGroup(tile));let size=findSizeInText(text);if(!size) size=findSizeInMapped(lbl);if(!size) size=findSizeInText(lbl);if(!size) continue;const variant=tileVariant(tile);const side=tileSide(tile);entries.push({size:cs(size),variant,side,tile})}return entries}
-function pickTilesForEntry(details,entry){let tiles=getAllTiles(details).filter(t=>tileHasSize(t,entry.size));if(entry.variant) tiles=tiles.filter(t=>(tileVariant(t)||null)===entry.variant);if(entry.side) tiles=tiles.filter(t=>(tileSide(t)||null)===entry.side);return tiles}
+function sizesFromExpanded(details){
+  if(!details) return[];
+  const entries=[];
+  const tiles=getAllTiles(details);
+  function findSizeInText(s){const m=String(s||'').match(/(\d{2,4})\s*[x×]\s*(\d{2,4})/i);return m?`${m[1]}x${m[2]}`:''}
+  function findSizeInMapped(lbl){const m=String(lbl||'').match(/mapped_(\d{2,4})\s*[x×]\s*(\d{2,4})(?:\b|[_\s])/i);return m?`${m[1]}x${m[2]}`:''}
+  for(const tile of tiles){
+    const text=(tile.innerText||'');
+    const lbl=groupLabel(tileGroup(tile));
+    let size=findSizeInText(text);
+    if(!size) size=findSizeInMapped(lbl);
+    if(!size) size=findSizeInText(lbl);
+    if(!size) continue;
+    const variant=tileVariant(tile);
+    const side=tileSide(tile);
+    entries.push({size:cs(size),variant,side,tile})
+  }
+  return entries
+}
+function pickTilesForEntry(details,entry){
+  let tiles=getAllTiles(details).filter(t=>tileHasSize(t,entry.size));
+  if(entry.variant) tiles=tiles.filter(t=>(tileVariant(t)||null)===entry.variant);
+  if(entry.side) tiles=tiles.filter(t=>(tileSide(t)||null)===entry.side);
+  return tiles
+}
 
 /* ========= 3rd-party tab + save/reprocess ========= */
-async function open3PTab(){const t=[...d.querySelectorAll('button[role="tab"],a[role="tab"],button,a')].filter(vis).find(b=>/\b3(?:rd)?\s*party\s*tag\b/i.test(b.textContent||''));if(t){t.click()}const editor=await waitFor(()=>{const panel=d.querySelector('#InfoPanelContainer')||d;const cm=[...panel.querySelectorAll('.CodeMirror')].find(vis);if(cm) return{kind:'cm',el:cm,panel,cm:cm.CodeMirror};const ta=[...panel.querySelectorAll('textarea')].find(vis);if(ta) return{kind:'ta',el:ta,panel};return null},4000,120);return editor||null}
-function pasteInto(target,value){if(!target) return;if(target.kind==='cm'&&target.cm){try{const cm=target.cm;cm.setValue((value||'')+'');cm.refresh?.();return}catch{}}const ta=target.el||target;ta.scrollIntoView({block:'center'});ta.focus();ta.value=value;ta.dispatchEvent(new Event('input',{bubbles:true}));ta.dispatchEvent(new Event('change',{bubbles:true}))}
-async function clickSaveOrReprocess(scope){const root=scope?.panel||d.querySelector('#InfoPanelContainer')||d;const btn=[...root.querySelectorAll('button')].filter(vis).find(b=>{const t=(b.textContent||'').toLowerCase();return /lagre|save|oppdater|update|send inn på nytt|reprocess/i.test(t)&&!b.disabled&&!b.classList.contains('Mui-disabled')});if(btn){btn.scrollIntoView({block:'center'});btn.click();await sleep(700);return true}return false}
+async function open3PTab(){
+  const t=[...d.querySelectorAll('button[role="tab"],a[role="tab"],button,a')].filter(vis).find(b=>/\b3(?:rd)?\s*party\s*tag\b/i.test(b.textContent||''));
+  if(t){t.click()}
+  const editor=await waitFor(()=>{
+    const panel=d.querySelector('#InfoPanelContainer')||d;
+    const cm=[...panel.querySelectorAll('.CodeMirror')].find(vis);
+    if(cm) return{kind:'cm',el:cm,panel,cm:cm.CodeMirror};
+    const ta=[...panel.querySelectorAll('textarea')].find(vis);
+    if(ta) return{kind:'ta',el:ta,panel};
+    return null
+  },4000,120);
+  return editor||null
+}
+function pasteInto(target,value){
+  if(!target) return;
+  if(target.kind==='cm'&&target.cm){
+    try{const cm=target.cm;cm.setValue((value||'')+'');cm.refresh?.();return}catch{}
+  }
+  const ta=target.el||target;
+  ta.scrollIntoView({block:'center'});
+  ta.focus();
+  ta.value=value;
+  ta.dispatchEvent(new Event('input',{bubbles:true}));
+  ta.dispatchEvent(new Event('change',{bubbles:true}))
+}
+async function clickSaveOrReprocess(scope){
+  const root=scope?.panel||d.querySelector('#InfoPanelContainer')||d;
+  const btn=[...root.querySelectorAll('button')].filter(vis).find(b=>{
+    const t=(b.textContent||'').toLowerCase();
+    return /lagre|save|oppdater|update|send inn på nytt|reprocess/i.test(t)&&!b.disabled&&!b.classList.contains('Mui-disabled')
+  });
+  if(btn){btn.scrollIntoView({block:'center'});btn.click();await sleep(700);return true}
+  return false
+}
 
+/* ========= Verify + retry helpers ========= */
+function normalizeTagForCompare(s){
+  return String(s||'').replace(/\r\n/g,'\n').replace(/[ \t]+\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
+}
+function getEditorValue(editor){
+  if (!editor) return '';
+  if (editor.kind === 'cm' && editor.cm) { try { return editor.cm.getValue() || ''; } catch { return ''; } }
+  const ta = editor.el || editor;
+  return ta?.value || '';
+}
+async function pasteWithVerify(editor, value, tries = 2){
+  const want = normalizeTagForCompare(value);
+  for (let attempt = 0; attempt <= tries; attempt++){
+    pasteInto(editor, value);
+    await sleep(120);
+    if (editor.kind === 'cm') { try { editor.cm?.refresh?.(); } catch {} await sleep(80); }
+    const got = normalizeTagForCompare(getEditorValue(editor));
+    if (got === want) return true;
+    if (got.replace(/\s+/g,'') === want.replace(/\s+/g,'')) return true;
+    await sleep(180);
+  }
+  return false;
+}
+async function saveWithRetry(editor, tries = 2){
+  for (let i = 0; i <= tries; i++){
+    const ok = await clickSaveOrReprocess(editor);
+    await waitForIdle(15000);
+    if (!ok) return false;
+    await ensureCampaignView();
+    await waitForIdle(8000);
+    return true;
+  }
+  return false;
+}
+async function checkpoint(label=''){
+  await ensureCampaignView();
+  await waitForIdle(15000);
+  if (label) LOG(`   · checkpoint ${label}`);
+}
 
 /* ========= UI ========= */
 (function injectCSS(){const st=d.createElement('style');st.textContent=`
@@ -320,7 +490,6 @@ function clearMap(){mapping=[];S(MAP_KEY,mapping);renderMapChip()}
 mapClear.onclick=()=>{clearMap();imagePool.clear();renderMapChip()};
 renderMapChip();
 
-
 /* ========= reuse assets setting (images + scripts) ========= */
 const REUSE_KEY_NEW = 'ap3p_reuse_assets';
 const REUSE_KEY_OLD = 'ap3p_reuse_images';
@@ -336,7 +505,7 @@ reuseTxt.textContent = 'Fill all tiles (reuse images/scripts)';
 reuseWrap.append(reuseCb, reuseTxt);
 body.insertBefore(reuseWrap, drop);
 
-let _lastPreview = null; // if you already have this, keep just one definition
+let _lastPreview = null;
 
 reuseCb.onchange = () => {
   reuseAssets = reuseCb.checked;
@@ -350,8 +519,6 @@ reuseCb.onchange = () => {
 
 const reuseImages = reuseAssets;
 
-
-
 /* ========= image helpers ========= */
 function getTileDropzoneInput(tile){return tile.querySelector('input[type="file"]')||null}
 async function uploadImageToInput(inp, file){
@@ -364,36 +531,21 @@ async function uploadImageToInput(inp, file){
   await sleep(300);
   return true;
 }
-
-
 async function confirmReplaceIfPrompted(timeout=5000){
-  // Wait until a confirm/overwrite dialog shows up (MUI or similar)
   const dlg = await waitFor(() => {
     const el = document.querySelector('.MuiDialog-container, .MuiDialog-root, [role="dialog"]');
     if (!el) return null;
     const txt = (el.innerText || '').toLowerCase();
-    // Norwegian + English keywords to be safe
     if (/(bekreftelse|erstatte|erstatt|overwrite|replace|confirm)/.test(txt)) return el;
     return null;
   }, timeout, 120);
-
   if (!dlg) return false;
-
-  // Prefer an explicit OK/Yes/Replace button; otherwise click the last button (usually primary)
   const btns = [...dlg.querySelectorAll('button')];
   const isOK = b => /^(ok|ja|fortsett|erstatte|erstatt|update|replace|confirm)$/i.test((b.innerText || '').trim());
   const okBtn = btns.find(isOK) || btns.at(-1);
-
-  if (okBtn) {
-    okBtn.scrollIntoView({block:'center'});
-    okBtn.click();
-    await sleep(200);
-    return true;
-  }
+  if (okBtn) { okBtn.scrollIntoView({block:'center'}); okBtn.click(); await sleep(200); return true; }
   return false;
 }
-
-
 async function uploadImageToTile(tile,file){
   const inp=getTileDropzoneInput(tile);
   if(!inp) return false;
@@ -402,18 +554,11 @@ async function uploadImageToTile(tile,file){
   inp.files=dt.files;
   inp.dispatchEvent(new Event('input',{bubbles:true}));
   inp.dispatchEvent(new Event('change',{bubbles:true}));
-
-  // give the UI a beat to render the dialog
   await sleep(200);
-
-  // auto-confirm "replace" if prompted
   await confirmReplaceIfPrompted(5000);
-
-  // short settle delay so the upload attaches before moving on
   await sleep(250);
   return true;
 }
-
 function parseSizeFromName(name){const m=String(name||'').match(/(\d{2,4})[x×](\d{2,4})/i);return m?`${m[1]}x${m[2]}`:''}
 function parseImageMeta(file){return{size:cs(parseSizeFromName(file.name)),side:detectSide(file.name),file}}
 function poolKey(size,side){return `${size}|${side||''}`}
@@ -421,21 +566,48 @@ function addImagesToPool(files){for(const f of files){const meta=parseImageMeta(
 
 /* ========= import UI ========= */
 btnCSV.onclick=()=>file.click();
-file.onchange=e=>{const f=e.target.files?.[0];if(!f) return;const r=new FileReader();r.onload=ev=>{const text=String(ev.target.result||'');if(f.name.toLowerCase().endsWith('.json')){try{saveMap(normalizeJSON(JSON.parse(text)))}catch{alert('Invalid JSON')}}else{try{saveMap(rowsToMap(parseCSV(text)))}catch(err){alert(err.message)}}};r.readAsText(f,'utf-8');file.value=''};
-btnPaste.onclick=()=>{const go=t=>{try{saveMap(rowsToMap(parseCSV(t)))}catch(e){alert(e.message)}};if(navigator.clipboard?.readText){navigator.clipboard.readText().then(go).catch(()=>{const t=prompt('Paste rows (Excel: Creative Name/Size, Secure Content)');if(t) go(t)})}else{const t=prompt('Paste rows (Excel: Creative Name/Size, Secure Content)');if(t) go(t)}};
+file.onchange=e=>{
+  const f=e.target.files?.[0];if(!f) return;
+  const r=new FileReader();
+  r.onload=ev=>{
+    const text=String(ev.target.result||'');
+    if(f.name.toLowerCase().endsWith('.json')){
+      try{saveMap(normalizeJSON(JSON.parse(text)))}catch{alert('Invalid JSON')}
+    }else{
+      try{saveMap(rowsToMap(parseCSV(text)))}catch(err){alert(err.message)}
+    }
+  };
+  r.readAsText(f,'utf-8');file.value=''
+};
+btnPaste.onclick=()=>{
+  const go=t=>{try{saveMap(rowsToMap(parseCSV(t)))}catch(e){alert(e.message)}};
+  if(navigator.clipboard?.readText){
+    navigator.clipboard.readText().then(go).catch(()=>{const t=prompt('Paste rows (Excel: Creative Name/Size, Secure Content)');if(t) go(t)})
+  }else{
+    const t=prompt('Paste rows (Excel: Creative Name/Size, Secure Content)');if(t) go(t)
+  }
+};
 ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.style.background='#171a24'}));
 ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.style.background='transparent'}));
 function isCSV(f){return /\.csv$/i.test(f.name)||f.type==='text/csv'}
 function isJSON(f){return /\.json$/i.test(f.name)||f.type==='application/json'}
 function readFileText(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result||''));r.onerror=rej;r.readAsText(file,'utf-8')})}
-drop.addEventListener('drop',async e=>{e.preventDefault();drop.style.background='transparent';const files=[...(e.dataTransfer?.files||[])];if(!files.length) return;const csvs=files.filter(isCSV),jsons=files.filter(isJSON),imgs=files.filter(f=>/^image\//.test(f.type)||/\.(psd|tiff?|webp)$/i.test(f.name));try{for(const f of csvs){const text=await readFileText(f);saveMap(rowsToMap(parseCSV(text)))}}catch(err){alert('CSV import failed: '+(err?.message||err))}try{for(const f of jsons){const text=await readFileText(f);saveMap(normalizeJSON(JSON.parse(text)))}}catch(err){alert('JSON import failed: '+(err?.message||err))}if(imgs.length) addImagesToPool(imgs);renderMapChip()});
+drop.addEventListener('drop',async e=>{
+  e.preventDefault();drop.style.background='transparent';
+  const files=[...(e.dataTransfer?.files||[])];if(!files.length) return;
+  const csvs=files.filter(isCSV),jsons=files.filter(isJSON),imgs=files.filter(f=>/^image\//.test(f.type)||/\.(psd|tiff?|webp)$/i.test(f.name));
+  try{for(const f of csvs){const text=await readFileText(f);saveMap(rowsToMap(parseCSV(text)))}}catch(err){alert('CSV import failed: '+(err?.message||err))}
+  try{for(const f of jsons){const text=await readFileText(f);saveMap(normalizeJSON(JSON.parse(text)))}}catch(err){alert('JSON import failed: '+(err?.message||err))}
+  if(imgs.length) addImagesToPool(imgs);
+  renderMapChip()
+});
 
 /* ========= pools (scripts) ========= */
 function buildTagPools(mapping){
-  const tagsByExactGlobal = new Map(); // "size|variant" -> [{tag,name},...]
-  const tagsBySizeGlobal  = new Map(); // "size"        -> [{tag,name},...]
-  const tagsByExactLine   = new Map(); // "line|size|variant" -> [{tag,name},...]
-  const tagsBySizeLine    = new Map(); // "line|size"         -> [{tag,name},...]
+  const tagsByExactGlobal = new Map();
+  const tagsBySizeGlobal  = new Map();
+  const tagsByExactLine   = new Map();
+  const tagsBySizeLine    = new Map();
 
   const keyExact = (lineId, size, variant) =>
     (lineId ? `${lineId}|` : '') + `${size}|${variant || ''}`;
@@ -449,7 +621,6 @@ function buildTagPools(mapping){
     const payload = { tag: m.tag, name: m.name || '' };
 
     if (ids.length){
-      // strictly line-scoped: DO NOT mirror into global
       for (const lid of ids){
         const k1 = keyExact(lid, m.size, m.variant || null);
         const k2 = keySize(lid, m.size);
@@ -460,7 +631,6 @@ function buildTagPools(mapping){
         lineScopedCount++;
       }
     }else{
-      // global-only row
       const k1 = `${m.size}|${m.variant || ''}`;
       const k2 = m.size;
       if (!tagsByExactGlobal.has(k1)) tagsByExactGlobal.set(k1, []);
@@ -472,8 +642,6 @@ function buildTagPools(mapping){
   }
 
   const hasLineIds = lineScopedCount > 0;
-
-  // Quick debug summary in the log to verify classification
   LOG(`CSV map: line-scoped=${lineScopedCount}, global=${globalCount}`);
 
   return {
@@ -493,14 +661,18 @@ function buildTagPools(mapping){
   };
 }
 
-
-
-
-
 /* ========= preview ========= */
-function imageChoicesForEntry(entry){const exact=imagePool.get(`${entry.size}|${entry.side||''}`)||[];if(exact.length) return exact;if(entry.side){const any=imagePool.get(`${entry.size}|`)||[];if(any.length) return any}return[]}
+function imageChoicesForEntry(entry){
+  const exact=imagePool.get(`${entry.size}|${entry.side||''}`)||[];
+  if(exact.length) return exact;
+  if(entry.side){
+    const any=imagePool.get(`${entry.size}|`)||[];
+    if(any.length) return any
+  }
+  return[]
+}
 function fileName(f){return(f&&f.name)?f.name:'(file)'}
-function tagLabel(entry){ 
+function tagLabel(entry){
   if (!entry) return '(unknown)';
   if (typeof entry === 'string') return entry.slice(0,60) + (entry.length>60?'…':'');
   return entry.name ? entry.name : '(unnamed creative)';
@@ -511,7 +683,6 @@ function previewPlannedPlacements(byId) {
   LOG(`Mode: ${pools.hasLineIds ? 'Line-targeted (IDs in CSV).' : 'Global (no line IDs in CSV).'}`);
 
   for (const [id, arr] of byId.entries()) {
-    // group by size|variant|side
     const groups = new Map();
     for (const e of arr) {
       const key = `${e.size}|${e.variant||''}|${e.side||''}`;
@@ -525,23 +696,19 @@ function previewPlannedPlacements(byId) {
     for (const { entry, tiles } of groups.values()) {
       const label = [entry.size, entry.variant, entry.side].filter(Boolean).join('/');
 
-      // Prefer images
       const imgsExact = imagePool.get(`${entry.size}|${entry.side||''}`) || [];
       const imgsAny   = entry.side ? (imagePool.get(`${entry.size}|`) || []) : [];
       const imgs = imgsExact.length ? imgsExact : imgsAny;
 
-if (imgs.length) {
-  const lines = tiles.map((_, i) => {
-    const f = reuseAssets ? imgs[i % imgs.length] : (i < imgs.length ? imgs[i] : null);
-    return f ? `tile#${i+1} ← ${fileName(f)}` : `tile#${i+1} ← (no image)`;
-  });
-  LOG(`   • ${label}  (images) ${tiles.length} tile(s)\n      ${lines.join('\n      ')}`);
-  continue;
-}
+      if (imgs.length) {
+        const lines = tiles.map((_, i) => {
+          const f = reuseAssets ? imgs[i % imgs.length] : (i < imgs.length ? imgs[i] : null);
+          return f ? `tile#${i+1} ← ${fileName(f)}` : `tile#${i+1} ← (no image)`;
+        });
+        LOG(`   • ${label}  (images) ${tiles.length} tile(s)\n      ${lines.join('\n      ')}`);
+        continue;
+      }
 
-
-
-      // Scripts
       let poolItems = pools.getExact(id, entry.size, entry.variant || null);
       let poolLabel = poolItems.length
         ? (pools.maps.tagsByExactLine.has(pools.kExact(id, entry.size, entry.variant || null)) ? 'script line:exact' : 'script global:exact')
@@ -555,63 +722,87 @@ if (imgs.length) {
       }
 
       if (!poolItems.length) {
-  LOG(`   • ${label}  (no matching images or scripts)`);
-  continue;
-}
+        LOG(`   • ${label}  (no matching images or scripts)`);
+        continue;
+      }
 
-const lines = tiles.map((_, i) => {
-  const payload = reuseAssets ? poolItems[i % poolItems.length]
-                              : (i < poolItems.length ? poolItems[i] : null);
-  const nice = payload ? tagLabel(payload) : '(no script)';
-  return `tile#${i+1} ← ${nice}`;
-});
+      const lines = tiles.map((_, i) => {
+        const payload = reuseAssets ? poolItems[i % poolItems.length]
+                                    : (i < poolItems.length ? poolItems[i] : null);
+        const nice = payload ? tagLabel(payload) : '(no script)';
+        return `tile#${i+1} ← ${nice}`;
+      });
 
-LOG(`   • ${label}  (scripts) ${tiles.length} tile(s)  pool=${poolLabel}\n      ${lines.join('\n      ')}`);
-
+      LOG(`   • ${label}  (scripts) ${tiles.length} tile(s)  pool=${poolLabel}\n      ${lines.join('\n      ')}`);
     }
   }
 }
 
-
-
-
 /* ========= scan ========= */
 let scanned=[]; let selected=new Set(G('ap3p_sel_ids',[]));
 function saveSelection(){S('ap3p_sel_ids',Array.from(selected))}
-function refreshList(){list.innerHTML='';if(!scanned.length){list.innerHTML='<div class="muted">No items — run Scan.</div>';return}
-  scanned.forEach(it=>{const row=d.createElement('label');row.className='item';const cb=d.createElement('input');cb.type='checkbox';cb.checked=selected.has(it.id);const id=d.createElement('span');id.className='id';id.textContent=it.id;const sz=d.createElement('span');sz.className='sizes';sz.textContent=it.label;row.append(cb,id,sz);list.appendChild(row);cb.onchange=()=>{if(cb.checked)selected.add(it.id);else selected.delete(it.id);saveSelection()}})}
+function refreshList(){
+  list.innerHTML='';
+  if(!scanned.length){list.innerHTML='<div class="muted">No items — run Scan.</div>';return}
+  scanned.forEach(it=>{
+    const row=d.createElement('label');row.className='item';
+    const cb=d.createElement('input');cb.type='checkbox';cb.checked=selected.has(it.id);
+    const id=d.createElement('span');id.className='id';id.textContent=it.id;
+    const sz=d.createElement('span');sz.className='sizes';sz.textContent=it.label;
+    row.append(cb,id,sz);list.appendChild(row);
+    cb.onchange=()=>{if(cb.checked)selected.add(it.id);else selected.delete(it.id);saveSelection()}
+  })
+}
 btnAll.onclick=()=>{selected=new Set(scanned.map(s=>s.id));saveSelection();refreshList()};
 btnNone.onclick=()=>{selected=new Set();saveSelection();refreshList()};
 btnInv.onclick=()=>{const next=new Set();scanned.forEach(s=>{if(!selected.has(s.id)) next.add(s.id)});selected=next;saveSelection();refreshList()};
 
-btnScan.onclick=async()=>{log.textContent='';scanned.length=0;const rows=findRows();const byId=new Map();
-for (const r of rows) {
-  await ensureCampaignView();
-  await waitForIdle();
+btnScan.onclick=async()=>{
+  log.textContent='';
+  scanned.length=0;
+  const rows=findRows();
+  const byId=new Map();
 
-  const id  = rowId(r);
-  const det = await expandRow(r);
+  for (const r of rows) {
+    await ensureCampaignView();
+    await waitForIdle();
+    const id  = rowId(r);
+    const det = await expandRow(r);
+    await waitForIdle();
+    await ensureAllTilesMounted(det || d);
+    await sleep(80);
+    let entries = sizesFromExpanded(det);
+    const prev = byId.get(id) || [];
+    byId.set(id, prev.concat(entries));
+    await sleep(40);
+  }
 
-  await waitForIdle();
-  await ensureAllTilesMounted(det || d);
-
-  await sleep(80);
-
-  let entries = sizesFromExpanded(det);
-  const prev = byId.get(id) || [];
-  byId.set(id, prev.concat(entries));
-
-  await sleep(40);
-}
-  const report=[];for(const [id,arr] of byId.entries()){const pretty=prettyCounts(arr.map(({size,variant})=>({size,variant})));LOG(`• ${id}  sizes:[${pretty||'-'}]`);const uniq=new Map();for(const e of arr){const k=`${e.size}|${e.variant||''}|${e.side||''}`;if(!uniq.has(k)) uniq.set(k,{size:e.size,variant:e.variant,side:e.side})}report.push({id,entries:[...uniq.values()],label:pretty||'-'})}
-  LOG(`\nFound ${report.length} line items.`);try{previewPlannedPlacements(byId)}catch(e){LOG('! Preview failed: '+(e?.message||e))}
+  const report=[];
+  for(const [id,arr] of byId.entries()){
+    const pretty=prettyCounts(arr.map(({size,variant})=>({size,variant})));
+    LOG(`• ${id}  sizes:[${pretty||'-'}]`);
+    const uniq=new Map();
+    for(const e of arr){const k=`${e.size}|${e.variant||''}|${e.side||''}`;if(!uniq.has(k)) uniq.set(k,{size:e.size,variant:e.variant,side:e.side})}
+    report.push({id,entries:[...uniq.values()],label:pretty||'-'})
+  }
+  LOG(`\nFound ${report.length} line items.`);
+  try{previewPlannedPlacements(byId)}catch(e){LOG('! Preview failed: '+(e?.message||e))}
   _lastPreview = byId;
-  setInfo({items:report.length,done:0,hit:0,skip:0,err:0});scanned=report.slice();selected=new Set(report.map(r=>r.id));saveSelection();refreshList();
+  setInfo({items:report.length,done:0,hit:0,skip:0,err:0});
+  scanned=report.slice();
+  selected=new Set(report.map(r=>r.id));
+  saveSelection();
+  refreshList();
 };
 
 /* ========= run ========= */
 let stopping=false; btnStop.onclick=()=>{stopping=true;btnStop.disabled=true;btnRun.disabled=false};
-btnRun.onclick=()=>{const ids=[...new Set(scanned.filter(s=>selected.has(s.id)).map(s=>s.id))];if(!ids.length){LOG('No items selected — run Scan and tick rows to include.');return}if(!mapping.length&&imagePool.size===0){LOG('No mapping loaded — import CSV/JSON or images first.');return}runOnIds(ids)};
+btnRun.onclick=()=>{
+  const ids=[...new Set(scanned.filter(s=>selected.has(s.id)).map(s=>s.id))];
+  if(!ids.length){LOG('No items selected — run Scan and tick rows to include.');return}
+  if(!mapping.length&&imagePool.size===0){LOG('No mapping loaded — import CSV/JSON or images first.');return}
+  runOnIds(ids)
+};
 
 async function runOnIds(ids){
   stopping=false;btnRun.disabled=true;btnStop.disabled=false;
@@ -622,178 +813,188 @@ async function runOnIds(ids){
   for(const id of ids){
     if(stopping) break;
     try{
-      const rowsForId=findRowsByIdAll(id); const detailsList=[]; let liveEntries=[];
-      for(const r of rowsForId){await ensureCampaignView();
-const det = await expandRow(r);
-await waitForIdle();
-await ensureAllTilesMounted(det || d);
-await sleep(80);
+      const rowsForId=findRowsByIdAll(id);
+      const detailsList=[];
+      let liveEntries=[];
 
-if (det) detailsList.push(det);
-liveEntries = liveEntries.concat(sizesFromExpanded(det))}
-      const uniq=new Map(); for(const e of liveEntries){const k=`${e.size}|${e.variant||''}|${e.side||''}`;if(!uniq.has(k)) uniq.set(k,{size:e.size,variant:e.variant,side:e.side})}
+      for(const r of rowsForId){
+        await ensureCampaignView();
+        const det = await expandRow(r);
+        await waitForIdle();
+        await ensureAllTilesMounted(det || d);
+        await sleep(80);
+        if (det) detailsList.push(det);
+        liveEntries = liveEntries.concat(sizesFromExpanded(det))
+      }
+
+      const uniq=new Map();
+      for(const e of liveEntries){const k=`${e.size}|${e.variant||''}|${e.side||''}`;if(!uniq.has(k)) uniq.set(k,{size:e.size,variant:e.variant,side:e.side})}
       const entries=[...uniq.values()];
       LOG(`→ ${id} sizes:[${prettyCounts(entries)||'—'}]`);
       if(!entries.length){stats.skip++;stats.done++;setInfo(stats);continue}
 
       let wrote=false;
+
       for(const entry of entries){
         await ensureCampaignView();
-await waitForIdle();
+        await waitForIdle();
 
-        let tiles = [];
-for (const det of detailsList) tiles = tiles.concat(pickTilesForEntry(det, entry));
-tiles = Array.from(new Set(tiles));
+        let tiles=[];
+        for (const det of detailsList) tiles = tiles.concat(pickTilesForEntry(det, entry));
+        tiles = Array.from(new Set(tiles));
 
-if (!tiles.length) {
-  await ensureAllTilesMounted();
-  tiles = [];
-  for (const det of detailsList) tiles = tiles.concat(pickTilesForEntry(det, entry));
-  tiles = Array.from(new Set(tiles));
-}
+        if (!tiles.length) {
+          await ensureAllTilesMounted();
+          tiles = [];
+          for (const det of detailsList) tiles = tiles.concat(pickTilesForEntry(det, entry));
+          tiles = Array.from(new Set(tiles));
+        }
 
-if (!tiles.length) {
-  LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''} (no tile match)`);
-  continue;
-}
-const imgs = imageChoicesForEntry(entry);
-if (imgs.length) {
-  let placed = 0;
-  for (let i = 0; i < tiles.length; i++) {
-    const t = tiles[i];
-    const f = reuseImages ? imgs[i % imgs.length] : (i < imgs.length ? imgs[i] : null);
-    if (!f) continue; // no reuse and no image left → skip tile
+        if (!tiles.length) {
+          LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''} (no tile match)`);
+          continue;
+        }
 
-    t.scrollIntoView({ block: 'center' });
+        // ----- images -----
+        const imgs = imageChoicesForEntry(entry);
+        if (imgs.length) {
+          let placed = 0;
+          for (let i = 0; i < tiles.length; i++) {
+            const t = tiles[i];
+            const f = reuseImages ? imgs[i % imgs.length] : (i < imgs.length ? imgs[i] : null);
+            if (!f) continue;
+            t.scrollIntoView({ block: 'center' });
+            let ok = await uploadImageToTile(t, f);
+            if (!ok) {
+              const alt = (t.closest('.set-creativeContainer') || document).querySelector('input[type="file"]');
+              if (alt) ok = await uploadImageToInput(alt, f);
+            }
+            await sleep(160);
+            placed++;
+          }
+          LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''}  placed images=${placed}${placed<tiles.length?` (skipped ${tiles.length-placed})`:''}`);
+          wrote = placed > 0 || wrote;
+          continue;
+        }
 
-    // Do NOT click the tile — avoids navigating to the preview
-    let ok = await uploadImageToTile(t, f);
-    if (!ok) {
-      const alt = (t.closest('.set-creativeContainer') || document)
-                    .querySelector('input[type="file"]');
-      if (alt) ok = await uploadImageToInput(alt, f);
+        // ----- scripts (line-aware pool) -----
+        const exactLine = pools.getExact(id, entry.size, entry.variant || null);
+        const sizeLine  = pools.getSize(id, entry.size);
+        const exactAny  = pools.getExact(null, entry.size, entry.variant || null);
+        const sizeAny   = pools.getSize(null, entry.size);
+
+        let list, pool;
+        if (pools.hasLineIds) {
+          if (exactLine.length) { list = exactLine; pool = 'line:exact'; }
+          else if (sizeLine.length) { list = sizeLine; pool = 'line:size'; }
+          else if (exactAny.length) { list = exactAny; pool = 'global:exact'; }
+          else { list = sizeAny; pool = 'global:size'; }
+        } else {
+          list = exactAny.length ? exactAny : sizeAny;
+          pool = exactAny.length ? 'global:exact' : 'global:size';
+        }
+
+        if (!list || !list.length) {
+          LOG(`   • ${entry.size}${entry.variant?('/'+entry.variant):''} (no tags for this size/line)`);
+          continue;
+        }
+
+        LOG(`   • ${entry.size}${entry.variant?('/'+entry.variant):''}  tiles=${tiles.length}, pool=${pool}, tags=${list.length}`);
+
+        let used = 0, skipped = 0;
+
+        // ✅ FIXED: single selection flow, checkpointing, and LOG outside loop
+        for (let i = 0; i < tiles.length; i++) {
+          if (i > 0 && (i % 8 === 0)) await checkpoint(`tile ${i}/${tiles.length}`);
+
+          const payload = reuseAssets ? list[i % list.length]
+                                      : (i < list.length ? list[i] : null);
+          if (!payload) { skipped++; continue; }
+
+          await ensureCampaignView();
+          await waitForIdle(12000);
+
+          await selectTile(tiles[i]);
+
+          if (!(await ensureCampaignView())) {
+            LOG('   ! Lost campaign view; going back…');
+            await sleep(250);
+            await ensureCampaignView();
+            await waitForIdle(8000);
+            await selectTile(tiles[i]);
+          }
+
+          const editor = await open3PTab();
+          if (!editor) { LOG('   ! 3rd-party editor not found'); stats.err++; continue; }
+
+          const tagStr = (typeof payload === 'string') ? payload : (payload?.tag || '');
+
+          const pasted = await pasteWithVerify(editor, tagStr, 2);
+          if (!pasted) {
+            LOG('   ! Paste did not stick after retries — skipping this tile');
+            stats.err++;
+            continue;
+          }
+
+          used++;
+
+          if (G('ap3p_auto', true)) {
+            const saved = await saveWithRetry(editor, 2);
+            if (!saved) LOG('   ! Save/Update/Reprocess failed or not found (continuing)');
+          }
+
+          await sleep(160);
+        }
+
+        LOG(`     → used scripts=${used}${skipped?` (skipped ${skipped})`:''}`);
+        wrote = used > 0 || wrote;
+      }
+
+      if(wrote) stats.hit++; else stats.skip++;
+      stats.done++; setInfo(stats); await sleep(160);
+    }catch(e){
+      LOG('   ! error: '+(e&&e.message?e.message:e));
+      stats.err++;stats.done++;setInfo(stats)
     }
-
-    await sleep(160);
-    placed++;
   }
-  LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''}  placed images=${placed}${placed<tiles.length?` (skipped ${tiles.length-placed})`:''}`);
-  wrote = placed > 0 || wrote;
-  continue;
-}
 
-
-        // Line-aware script pool: prefer exact(size+variant) for this line, then size for this line,
-// then global exact, then global size.
-const exactLine = pools.getExact(id, entry.size, entry.variant || null);
-const sizeLine  = pools.getSize(id, entry.size);
-const exactAny  = pools.getExact(null, entry.size, entry.variant || null);
-const sizeAny   = pools.getSize(null, entry.size);
-
-let list, pool;
-if (pools.hasLineIds) {
-  if (exactLine.length) { list = exactLine; pool = 'line:exact'; }
-  else if (sizeLine.length) { list = sizeLine; pool = 'line:size'; }
-  else if (exactAny.length) { list = exactAny; pool = 'global:exact'; }
-  else { list = sizeAny; pool = 'global:size'; }
-} else {
-  list = exactAny.length ? exactAny : sizeAny;
-  pool = exactAny.length ? 'global:exact' : 'global:size';
-}
-
-if (!list || !list.length) {
-  LOG(`   • ${entry.size}${entry.variant?('/'+entry.variant):''} (no tags for this size/line)`);
-  continue;
-}
-
-LOG(`   • ${entry.size}${entry.variant?('/'+entry.variant):''}  tiles=${tiles.length}, pool=${pool}, tags=${list.length}`);
-
-let used = 0, skipped = 0;
-for (let i = 0; i < tiles.length; i++) {
-  const payload = reuseAssets ? list[i % list.length]
-                              : (i < list.length ? list[i] : null);
-  if (!payload) { skipped++; continue; }
-
-  await selectTile(tiles[i]);
-  // If selection accidentally navigated somewhere, go back and retry once
-if (!(await ensureCampaignView())) {
-  LOG('   ! Lost campaign view; attempted to go back.');
-  await sleep(250);
-}
-
-await waitForIdle();
-
-// Optional: retry selection once if it still isn't selected
-if (!isTileSelected(tiles[i])) {
-  await selectTile(tiles[i]);
-  await waitForIdle();
-}
-
-  const editor = await open3PTab();
-  if (!editor) { LOG('   ! 3rd-party editor not found'); stats.err++; continue; }
-
-  const tagStr = (typeof payload === 'string') ? payload : (payload?.tag || '');
-  pasteInto(editor, tagStr);
-
-  used++;
-  if (G('ap3p_auto', true)) {
-    const ok = await clickSaveOrReprocess(editor);
-    await waitForIdle(15000);
-await ensureCampaignView(); // if it navigated, come back before next tile
-
-    if (!ok) LOG('   ! Save/Update/Reprocess not found (continuing)');
-  }
-  await sleep(160);
-}
-
-LOG(`     → used scripts=${used}${skipped?` (skipped ${skipped})`:''}`);
-wrote = used > 0 || wrote;
-
-}
-      if(wrote) stats.hit++; else stats.skip++; stats.done++; setInfo(stats); await sleep(160);
-    }catch(e){LOG('   ! error: '+(e&&e.message?e.message:e));stats.err++;stats.done++;setInfo(stats)}
-  }
   LOG(`Done. Items=${stats.items}  Hit=${stats.hit}  Skip=${stats.skip}  Err=${stats.err}`);
   btnStop.disabled=true; btnRun.disabled=false;
 }
 
 /* ========= niceties ========= */
-_bestiltInt=setInterval(()=>{const panel=d.querySelector('#InfoPanelContainer');const t=panel?.innerText||'';const m=t.match(/Bestilt(?:\s*\(BxH\))?\s*[:\-]?\s*(\d{2,4})\s*[x×]\s*(\d{2,4})/i);badge.textContent=m?`— ${m[1]}x${m[2]}`:''},900);
+_bestiltInt=setInterval(()=>{
+  const panel=d.querySelector('#InfoPanelContainer');
+  const t=panel?.innerText||'';
+  const m=t.match(/Bestilt(?:\s*\(BxH\))?\s*[:\-]?\s*(\d{2,4})\s*[x×]\s*(\d{2,4})/i);
+  badge.textContent=m?`— ${m[1]}x${m[2]}`:''
+},900);
+
 w.addEventListener('keydown',e=>{if(e.altKey&&e.key.toLowerCase()==='a'){e.preventDefault();btnRun.click()}});
 
-function inCampaignTableView(){
-  // Campaign list view has visible line rows
-  return !!document.querySelector('tr.set-matSpecDataRow');
-}
+function inCampaignTableView(){ return !!document.querySelector('tr.set-matSpecDataRow'); }
 
 function findBackToCampaignButton(){
-  // In your snapshot, the back arrow button has an SVG path starting with:
-  // M9.4 16.6L4.8 12...
-  // We'll match that safely.
   const btns = [...document.querySelectorAll('button, [role="button"]')];
   for (const b of btns) {
     const p = b.querySelector('svg path');
-    const d = p?.getAttribute?.('d') || '';
-    if (d.startsWith('M9.4 16.6L4.8 12')) return b;
+    const dd = p?.getAttribute?.('d') || '';
+    if (dd.startsWith('M9.4 16.6L4.8 12')) return b;
   }
   return null;
 }
 
 async function ensureCampaignView(){
   if (inCampaignTableView()) return true;
-
   const back = findBackToCampaignButton();
   if (back) {
     back.scrollIntoView({ block:'center' });
     back.click();
-    // wait until the table view is back
     await waitFor(() => inCampaignTableView(), 8000, 120);
   }
-
   return inCampaignTableView();
 }
 
-// Wait for "busy" overlays to clear (MUI Backdrop / progress)
 async function waitForIdle(timeout=12000){
   const start = Date.now();
   while (Date.now() - start < timeout) {
@@ -816,7 +1017,4 @@ async function waitForIdle(timeout=12000){
   return true;
 }
 
-
-
 }catch(e){console.error(e);alert('Autofill error: '+(e&&e.message?e.message:e));}})();
-
