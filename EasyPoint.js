@@ -54,7 +54,6 @@ function tileClickTargets(tile){
     tile
   ].filter(Boolean);
 }
-
 function isTileSelected(tile){
   if(tile.classList.contains('set-creativeTile__selected'))return true;
   if(tile.getAttribute('aria-selected')==='true')return true;
@@ -62,7 +61,6 @@ function isTileSelected(tile){
   if(tile.closest('.set-creativeTile__selected'))return true;
   return false;
 }
-
 async function selectTile(tile){
   if (!tile) return false;
   if (isTileSelected(tile)) return true;
@@ -99,7 +97,6 @@ async function selectTile(tile){
   }
   return isTileSelected(tile);
 }
-
 function getAllTiles(details){
   let tiles = [...details.querySelectorAll('.set-creativeTile, .set-creativeTile__selected')];
   return tiles.filter(t => !tiles.some(o => o !== t && o.contains(t)));
@@ -135,8 +132,7 @@ function parseCSV(text){
     else if(!q&&ch=='\r'){}
     else f+=ch
   }
-  row.push(f);rows.push(row);
-  return rows
+  row.push(f);rows.push(row);return rows
 }
 function pickHeader(h,names){
   const L=h.map(x=>String(x||'').toLowerCase());
@@ -155,7 +151,8 @@ function rowsToMap(rows){
   const sizeIdx=pickHeader(head,['størrelse','stoerrelse','size']);
   const nameIdx=pickHeader(head,['creative name','creative','name','navn']);
   const tagIdx=pickHeader(head,['secure content','script','tag','kode','code']);
-  if(tagIdx<0||(sizeIdx<0&&nameIdx<0))throw new Error('Missing columns: Secure Content + (Size or Creative Name)');
+  if(tagIdx<0||(sizeIdx<0&&nameIdx<0))throw new Error('Mangler kolonner: Secure Content + (Size eller Creative Name)');
+
   let warned=false; const out=[];
   for(let r=headRow+1;r<rows.length;r++){
     const cells = rows[r] || [];
@@ -176,7 +173,7 @@ function rowsToMap(rows){
     }
 
     if (svSize.size && svName.size && cs(svSize.size)!==cs(svName.size) && !warned){
-      LOG('! CSV warning: Size column disagrees with Creative Name — trusting the Size column.');
+      LOG('! CSV-advarsel: "Size" er ulik "Creative Name" — jeg stoler på Size-kolonnen.');
       warned = true;
     }
     if (size && tag) out.push({ size, variant, tag, name, vkey, lineIds });
@@ -201,7 +198,7 @@ function normalizeJSON(arr){
     }
 
     if (svSize.size && svName.size && cs(svSize.size)!==cs(svName.size) && !warned){
-      LOG('! JSON warning: Size field disagrees with name — trusting the Size field.');
+      LOG('! JSON-advarsel: "Size" er ulik "name" — jeg stoler på Size-feltet.');
       warned=true;
     }
     if (size && tag) out.push({ size, variant, tag, name: rawName, vkey, lineIds });
@@ -211,13 +208,9 @@ function normalizeJSON(arr){
 
 /* ========= line items ========= */
 function normLabel(s){return String(s||'').toLowerCase().replace(/\s+/g,' ').trim()}
-function findRows(){
-  const rows=[...d.querySelectorAll('tr.set-matSpecDataRow')].filter(vis);
-  return rows.filter(el=>!rows.some(o=>o!==el&&o.contains(el)))
-}
+function findRows(){const rows=[...d.querySelectorAll('tr.set-matSpecDataRow')].filter(vis);return rows.filter(el=>!rows.some(o=>o!==el&&o.contains(el)))}
 function getHeaderIdxForRow(row){
-  const table=row.closest('table');
-  if(!table) return{lineItemIdx:-1,rosenrIdx:-1};
+  const table=row.closest('table');if(!table) return{lineItemIdx:-1,rosenrIdx:-1};
   if(table._ap3p_headerIdx) return table._ap3p_headerIdx;
   const ths=[...(table.tHead?.querySelectorAll('th')||[])];
   let lineItemIdx=-1,rosenrIdx=-1;
@@ -226,8 +219,7 @@ function getHeaderIdxForRow(row){
     if(lineItemIdx===-1&&/(^|\s)line\s*item(\s|$)/.test(t)) lineItemIdx=i;
     if(rosenrIdx===-1&&(/rosenr/.test(t)||(/materiell/.test(t)&&/rosenr/.test(t)))) rosenrIdx=i
   });
-  table._ap3p_headerIdx={lineItemIdx,rosenrIdx};
-  return table._ap3p_headerIdx
+  table._ap3p_headerIdx={lineItemIdx,rosenrIdx};return table._ap3p_headerIdx
 }
 function rowId(row){
   const {lineItemIdx,rosenrIdx}=getHeaderIdxForRow(row);
@@ -326,11 +318,17 @@ async function clickSaveOrReprocess(scope){
 
 /* ========= Verify + retry helpers ========= */
 function normalizeTagForCompare(s){
-  return String(s||'').replace(/\r\n/g,'\n').replace(/[ \t]+\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
+  return String(s||'')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 function getEditorValue(editor){
   if (!editor) return '';
-  if (editor.kind === 'cm' && editor.cm) { try { return editor.cm.getValue() || ''; } catch { return ''; } }
+  if (editor.kind === 'cm' && editor.cm) {
+    try { return editor.cm.getValue() || ''; } catch { return ''; }
+  }
   const ta = editor.el || editor;
   return ta?.value || '';
 }
@@ -339,7 +337,10 @@ async function pasteWithVerify(editor, value, tries = 2){
   for (let attempt = 0; attempt <= tries; attempt++){
     pasteInto(editor, value);
     await sleep(120);
-    if (editor.kind === 'cm') { try { editor.cm?.refresh?.(); } catch {} await sleep(80); }
+    if (editor.kind === 'cm') {
+      try { editor.cm?.refresh?.(); } catch {}
+      await sleep(80);
+    }
     const got = normalizeTagForCompare(getEditorValue(editor));
     if (got === want) return true;
     if (got.replace(/\s+/g,'') === want.replace(/\s+/g,'')) return true;
@@ -361,11 +362,13 @@ async function saveWithRetry(editor, tries = 2){
 async function checkpoint(label=''){
   await ensureCampaignView();
   await waitForIdle(15000);
-  if (label) LOG(`   · checkpoint ${label}`);
+  if (label) LOG(`   · sjekkpunkt ${label}`);
 }
 
 /* ========= UI ========= */
-(function injectCSS(){const st=d.createElement('style');st.textContent=`
+(function injectCSS(){
+  const st=d.createElement('style');
+  st.textContent=`
 #ap3p_bar{box-sizing:border-box}
 #ap3p_list .item{display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:6px}
 #ap3p_list .item:hover{background:#121521}
@@ -375,6 +378,23 @@ async function checkpoint(label=''){
 #ap3p_bar .chip{padding:3px 8px;border-radius:999px;border:1px solid;font-size:12px;opacity:.95}
 #ap3p_bar .chip-ok{background:#064e3b;border-color:#10b981;color:#d1fae5}
 #ap3p_bar .chip-none{background:#1a1d27;border-color:#2a2d37;color:#e6e6e6}
+
+/* Flash/pulse */
+@keyframes ap3pPulse { 0%{transform:scale(1);filter:brightness(1)} 30%{transform:scale(1.02);filter:brightness(1.25)} 100%{transform:scale(1);filter:brightness(1)} }
+.ap3p-flash{animation: ap3pPulse 550ms ease-out 1;}
+
+/* Toast */
+#ap3p_toast{
+  position:fixed; right:18px; bottom:18px; z-index:2147483648;
+  background:#0b0c10; border:1px solid #2a2d37; color:#e6e6e6;
+  padding:10px 12px; border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.45);
+  max-width: 360px; font: 12px/1.35 ui-sans-serif,system-ui; opacity:0; transform:translateY(6px);
+  transition: opacity .18s ease, transform .18s ease;
+}
+#ap3p_toast.show{opacity:1; transform:translateY(0px);}
+#ap3p_toast .t{font-weight:700;margin-bottom:4px}
+#ap3p_toast .s{opacity:.85}
+
 /* Resize handles */
 #ap3p_bar .aprs{position:absolute;z-index:2147483648;background:transparent}
 #ap3p_bar .aprs-n{top:-4px;left:10px;right:10px;height:8px;cursor:ns-resize}
@@ -386,7 +406,9 @@ async function checkpoint(label=''){
 #ap3p_bar .aprs-nw{top:-6px;left:-6px;cursor:nwse-resize}
 #ap3p_bar .aprs-se{bottom:-6px;right:-6px;cursor:nwse-resize}
 #ap3p_bar .aprs-sw{bottom:-6px;left:-6px;cursor:nesw-resize}
-`;d.head.appendChild(st)})();
+`;
+  d.head.appendChild(st)
+})();
 
 let ui=d.getElementById('ap3p_bar'); if(ui) ui.remove();
 ui=d.createElement('div'); ui.id='ap3p_bar';
@@ -397,27 +419,28 @@ hdr.style.cssText='cursor:move;user-select:none;display:flex;align-items:center;
 const title=d.createElement('div'); title.textContent='EasyPoint';
 const badge=d.createElement('span'); badge.style.opacity='.8'; badge.style.marginLeft='6px'; badge.textContent='';
 const mapChip=d.createElement('span'); mapChip.className='chip chip-none';
-const mapClear=d.createElement('button'); mapClear.textContent='×'; mapClear.title='Clear mapping'; mapClear.style.cssText='margin-left:4px;border:1px solid #2a2d37;background:#1a1d27;color:#e6e6e6;width:22px;height:22px;border-radius:6px;cursor:pointer';
+const mapClear=d.createElement('button'); mapClear.textContent='×'; mapClear.title='Tøm mapping'; mapClear.style.cssText='margin-left:4px;border:1px solid #2a2d37;background:#1a1d27;color:#e6e6e6;width:22px;height:22px;border-radius:6px;cursor:pointer';
 const flex=d.createElement('div'); flex.style.flex='1';
-const btnScan=d.createElement('button'); btnScan.textContent='Scan'; btnScan.style.cssText='cursor:pointer;border:1px solid #0284c7;border-radius:8px;padding:6px 10px;background:#0ea5e9;color:#041014;font-weight:600';
-const btnRun=d.createElement('button'); btnRun.textContent='Autofill'; btnRun.style.cssText='cursor:pointer;border:1px solid #15803d;border-radius:8px;padding:6px 10px;background:#22c55e;color:#051b0a;font-weight:700';
-const btnStop=d.createElement('button'); btnStop.textContent='Stop'; btnStop.disabled=true; btnStop.style.cssText='cursor:pointer;border:1px solid #b91c1c;border-radius:8px;padding:6px 10px;background:#ef4444;color:#ffffff;font-weight:700';
-const btnMin=d.createElement('button'); btnMin.textContent='–'; btnMin.title='Minimize'; btnMin.style.cssText='border:1px solid #2a2d37;background:#1a1d27;color:#e6e6e6;width:26px;height:26px;border-radius:7px;margin-left:6px;cursor:pointer';
-const btnX=d.createElement('button'); btnX.textContent='×'; btnX.title='Close'; btnX.style.cssText='border:1px solid #2a2d37;background:#1a1d27;color:#e6e6e6;width:26px;height:26px;border-radius:7px;cursor:pointer';
+
+const btnScan=d.createElement('button'); btnScan.textContent='Skann'; btnScan.style.cssText='cursor:pointer;border:1px solid #0284c7;border-radius:8px;padding:6px 10px;background:#0ea5e9;color:#041014;font-weight:600';
+const btnRun=d.createElement('button'); btnRun.textContent='Autofyll'; btnRun.style.cssText='cursor:pointer;border:1px solid #15803d;border-radius:8px;padding:6px 10px;background:#22c55e;color:#051b0a;font-weight:700';
+const btnStop=d.createElement('button'); btnStop.textContent='Stopp'; btnStop.disabled=true; btnStop.style.cssText='cursor:pointer;border:1px solid #b91c1c;border-radius:8px;padding:6px 10px;background:#ef4444;color:#ffffff;font-weight:700';
+const btnMin=d.createElement('button'); btnMin.textContent='–'; btnMin.title='Minimer'; btnMin.style.cssText='border:1px solid #2a2d37;background:#1a1d27;color:#e6e6e6;width:26px;height:26px;border-radius:7px;margin-left:6px;cursor:pointer';
+const btnX=d.createElement('button'); btnX.textContent='×'; btnX.title='Lukk'; btnX.style.cssText='border:1px solid #2a2d37;background:#1a1d27;color:#e6e6e6;width:26px;height:26px;border-radius:7px;cursor:pointer';
 hdr.append(title,badge,mapChip,mapClear,flex,btnScan,btnRun,btnStop,btnMin,btnX);
 
 const body=d.createElement('div');
 body.style.cssText='padding:8px 10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap';
-const info=d.createElement('span'); info.textContent='Items: —'; info.style.opacity='.9';
-const btnCSV=d.createElement('button'); btnCSV.textContent='Import CSV/JSON'; btnCSV.style.cssText='cursor:pointer;border:1px solid #2a2d37;border-radius:8px;padding:6px 10px;background:#1a1d27;color:#e6e6e6';
-const btnPaste=d.createElement('button'); btnPaste.textContent='Paste from Excel'; btnPaste.style.cssText='cursor:pointer;border:1px solid #2a2d37;border-radius:8px;padding:6px 10px;background:#1a1d27;color:#e6e6e6';
+const info=d.createElement('span'); info.textContent='Linjer: —'; info.style.opacity='.9';
+const btnCSV=d.createElement('button'); btnCSV.textContent='Importer CSV/JSON'; btnCSV.style.cssText='cursor:pointer;border:1px solid #2a2d37;border-radius:8px;padding:6px 10px;background:#1a1d27;color:#e6e6e6';
+const btnPaste=d.createElement('button'); btnPaste.textContent='Lim inn fra Excel'; btnPaste.style.cssText='cursor:pointer;border:1px solid #2a2d37;border-radius:8px;padding:6px 10px;background:#1a1d27;color:#e6e6e6';
 const file=d.createElement('input'); file.type='file'; file.accept='.csv,.json,.txt'; file.style.display='none';
-const drop=d.createElement('div'); drop.textContent='Drop CSV/JSON/Images here'; drop.style.cssText='flex:1 1 100%;border:1px dashed #3a3f52;border-radius:8px;height:64px;display:flex;align-items:center;justify-content:center;opacity:.9';
+const drop=d.createElement('div'); drop.textContent='Slipp CSV/JSON/bilder her'; drop.style.cssText='flex:1 1 100%;border:1px dashed #3a3f52;border-radius:8px;height:64px;display:flex;align-items:center;justify-content:center;opacity:.9';
 const listWrap=d.createElement('div'); listWrap.style.cssText='flex:1 1 100%';
 const listCtrls=d.createElement('div'); listCtrls.id='ap3p_list_ctrls'; listCtrls.style.cssText='display:flex;align-items:center;gap:8px;margin:2px 0 4px 0;opacity:.9';
-const btnAll=d.createElement('button'); btnAll.textContent='Select all';
-const btnNone=d.createElement('button'); btnNone.textContent='Select none';
-const btnInv=d.createElement('button'); btnInv.textContent='Invert';
+const btnAll=d.createElement('button'); btnAll.textContent='Velg alle';
+const btnNone=d.createElement('button'); btnNone.textContent='Velg ingen';
+const btnInv=d.createElement('button'); btnInv.textContent='Inverter';
 [btnAll,btnNone,btnInv].forEach(b=>b.style.cssText='cursor:pointer;border:1px solid #2a2d37;border-radius:6px;padding:4px 8px;background:#1a1d27;color:#e6e6e6');
 listCtrls.append(btnAll,btnNone,btnInv);
 const list=d.createElement('div'); list.id='ap3p_list'; list.style.cssText='max-height:180px;overflow:auto;background:#0b0c10;border:1px solid #1b1e28;border-radius:8px;padding:6px';
@@ -426,8 +449,33 @@ const log=d.createElement('div'); log.style.cssText='height:220px;overflow:auto;
 ui.append(hdr,body,listWrap,log); d.body.appendChild(ui);
 
 const LOG=m=>{log.textContent+=m+'\n'; log.scrollTop=log.scrollHeight;};
-const setInfo=o=>{info.textContent=`Items:${o.items}  Done:${o.done}  Hit:${o.hit}  Skip:${o.skip}  Err:${o.err}`};
+const setInfo=o=>{info.textContent=`Linjer:${o.items}  Ferdig:${o.done}  Treff:${o.hit}  Hoppet:${o.skip}  Feil:${o.err}`};
 body.append(info,btnCSV,btnPaste,file,drop);
+
+/* ===== UX: toast + flash ===== */
+let toast = d.getElementById('ap3p_toast');
+if(!toast){
+  toast = d.createElement('div');
+  toast.id='ap3p_toast';
+  toast.innerHTML = `<div class="t"></div><div class="s"></div>`;
+  d.body.appendChild(toast);
+}
+let toastTimer=null;
+function showToast(t,s=''){
+  try{
+    toast.querySelector('.t').textContent = t||'';
+    toast.querySelector('.s').textContent = s||'';
+    toast.classList.add('show');
+    if(toastTimer) clearTimeout(toastTimer);
+    toastTimer=setTimeout(()=>toast.classList.remove('show'), 1800);
+  }catch{}
+}
+function flash(el){
+  if(!el) return;
+  el.classList.remove('ap3p-flash');
+  void el.offsetWidth;
+  el.classList.add('ap3p-flash');
+}
 
 /* ===== Drag, Resize, Minimize, Close ===== */
 function adjustHeights(totalH){
@@ -477,16 +525,34 @@ function setMinimized(min){
 }
 btnMin.onclick=()=>setMinimized(ui.getAttribute('data-min')!=='1');
 let _bestiltInt=null;
-btnX.onclick=()=>{ if(_bestiltInt) clearInterval(_bestiltInt); ui.remove(); };
+btnX.onclick=()=>{ if(_bestiltInt) clearInterval(_bestiltInt); ui.remove(); toast?.remove?.(); };
 adjustHeights(ui.getBoundingClientRect().height);
 
 /* ========= mapping state ========= */
 const MAP_KEY='ap3p_map_v2';
 let mapping=G(MAP_KEY,[]);
 let imagePool=new Map(); // key `${size}|${side||''}` -> [File,...]
-function renderMapChip(){const csvCount=mapping.length;let imgCount=0;imagePool.forEach(a=>imgCount+=a.length);mapChip.className=(csvCount||imgCount)?'chip chip-ok':'chip chip-none';mapChip.textContent=(csvCount||imgCount)?`CSV: ${csvCount}  Images: ${imgCount} ✓`:'CSV/Images: none'}
-function saveMap(arr){mapping=arr;S(MAP_KEY,mapping);renderMapChip()}
-function clearMap(){mapping=[];S(MAP_KEY,mapping);renderMapChip()}
+
+function renderMapChip(){
+  const csvCount=mapping.length;
+  let imgCount=0; imagePool.forEach(a=>imgCount+=a.length);
+  mapChip.className=(csvCount||imgCount)?'chip chip-ok':'chip chip-none';
+  mapChip.textContent=(csvCount||imgCount)?`CSV: ${csvCount}  Bilder: ${imgCount} ✓`:'CSV/Bilder: ingen';
+}
+function saveMap(arr){
+  mapping=arr;
+  S(MAP_KEY,mapping);
+  renderMapChip();
+  flash(mapChip); flash(drop);
+  showToast('Mapping oppdatert', `CSV-rader: ${mapping.length}`);
+}
+function clearMap(){
+  mapping=[];
+  S(MAP_KEY,mapping);
+  renderMapChip();
+  flash(mapChip);
+  showToast('Mapping tømt');
+}
 mapClear.onclick=()=>{clearMap();imagePool.clear();renderMapChip()};
 renderMapChip();
 
@@ -501,7 +567,7 @@ const reuseCb = document.createElement('input');
 reuseCb.type='checkbox';
 reuseCb.checked = reuseAssets;
 const reuseTxt = document.createElement('span');
-reuseTxt.textContent = 'Fill all tiles (reuse images/scripts)';
+reuseTxt.textContent = 'Fyll alle fliser (gjenbruk bilder/scripts)';
 reuseWrap.append(reuseCb, reuseTxt);
 body.insertBefore(reuseWrap, drop);
 
@@ -510,27 +576,17 @@ let _lastPreview = null;
 reuseCb.onchange = () => {
   reuseAssets = reuseCb.checked;
   S(REUSE_KEY_NEW, reuseAssets);
+  showToast('Modus endret', reuseAssets ? 'Gjenbruk på' : 'Gjenbruk av');
   if (_lastPreview) {
     log.textContent = '';
-    LOG(`Mode: ${reuseAssets ? 'Reuse to fill all tiles' : "Don't reuse (use each once)"}`);
+    LOG(`Modus: ${reuseAssets ? 'Gjenbruk for å fylle alle fliser' : "Ikke gjenbruk (bruk hver kun én gang)"}`);
     previewPlannedPlacements(_lastPreview);
   }
 };
-
 const reuseImages = reuseAssets;
 
 /* ========= image helpers ========= */
 function getTileDropzoneInput(tile){return tile.querySelector('input[type="file"]')||null}
-async function uploadImageToInput(inp, file){
-  if (!inp) return false;
-  const dt = new DataTransfer();
-  dt.items.add(file);
-  inp.files = dt.files;
-  inp.dispatchEvent(new Event('input',{bubbles:true}));
-  inp.dispatchEvent(new Event('change',{bubbles:true}));
-  await sleep(300);
-  return true;
-}
 async function confirmReplaceIfPrompted(timeout=5000){
   const dlg = await waitFor(() => {
     const el = document.querySelector('.MuiDialog-container, .MuiDialog-root, [role="dialog"]');
@@ -540,10 +596,16 @@ async function confirmReplaceIfPrompted(timeout=5000){
     return null;
   }, timeout, 120);
   if (!dlg) return false;
+
   const btns = [...dlg.querySelectorAll('button')];
   const isOK = b => /^(ok|ja|fortsett|erstatte|erstatt|update|replace|confirm)$/i.test((b.innerText || '').trim());
   const okBtn = btns.find(isOK) || btns.at(-1);
-  if (okBtn) { okBtn.scrollIntoView({block:'center'}); okBtn.click(); await sleep(200); return true; }
+  if (okBtn) {
+    okBtn.scrollIntoView({block:'center'});
+    okBtn.click();
+    await sleep(200);
+    return true;
+  }
   return false;
 }
 async function uploadImageToTile(tile,file){
@@ -562,44 +624,64 @@ async function uploadImageToTile(tile,file){
 function parseSizeFromName(name){const m=String(name||'').match(/(\d{2,4})[x×](\d{2,4})/i);return m?`${m[1]}x${m[2]}`:''}
 function parseImageMeta(file){return{size:cs(parseSizeFromName(file.name)),side:detectSide(file.name),file}}
 function poolKey(size,side){return `${size}|${side||''}`}
-function addImagesToPool(files){for(const f of files){const meta=parseImageMeta(f);if(!meta.size) continue;const key=poolKey(meta.size,meta.side);if(!imagePool.has(key)) imagePool.set(key,[]);imagePool.get(key).push(f)}}
+function addImagesToPool(files){
+  let added=0;
+  for(const f of files){
+    const meta=parseImageMeta(f);
+    if(!meta.size) continue;
+    const key=poolKey(meta.size,meta.side);
+    if(!imagePool.has(key)) imagePool.set(key,[]);
+    imagePool.get(key).push(f);
+    added++;
+  }
+  renderMapChip();
+  flash(mapChip); flash(drop);
+  showToast('Bilder lagt til', `Antall: ${added}`);
+}
 
 /* ========= import UI ========= */
 btnCSV.onclick=()=>file.click();
 file.onchange=e=>{
-  const f=e.target.files?.[0];if(!f) return;
+  const f=e.target.files?.[0];
+  if(!f) return;
   const r=new FileReader();
   r.onload=ev=>{
     const text=String(ev.target.result||'');
     if(f.name.toLowerCase().endsWith('.json')){
-      try{saveMap(normalizeJSON(JSON.parse(text)))}catch{alert('Invalid JSON')}
+      try{saveMap(normalizeJSON(JSON.parse(text)))}catch{alert('Ugyldig JSON')}
     }else{
       try{saveMap(rowsToMap(parseCSV(text)))}catch(err){alert(err.message)}
     }
   };
-  r.readAsText(f,'utf-8');file.value=''
+  r.readAsText(f,'utf-8');
+  file.value='';
 };
 btnPaste.onclick=()=>{
   const go=t=>{try{saveMap(rowsToMap(parseCSV(t)))}catch(e){alert(e.message)}};
   if(navigator.clipboard?.readText){
-    navigator.clipboard.readText().then(go).catch(()=>{const t=prompt('Paste rows (Excel: Creative Name/Size, Secure Content)');if(t) go(t)})
+    navigator.clipboard.readText().then(go).catch(()=>{
+      const t=prompt('Lim inn rader (Excel: Creative Name/Size + Secure Content)');
+      if(t) go(t);
+    })
   }else{
-    const t=prompt('Paste rows (Excel: Creative Name/Size, Secure Content)');if(t) go(t)
+    const t=prompt('Lim inn rader (Excel: Creative Name/Size + Secure Content)');
+    if(t) go(t);
   }
 };
-['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.style.background='#171a24'}));
+['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.style.background='#171a24';flash(drop)}));
 ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.style.background='transparent'}));
 function isCSV(f){return /\.csv$/i.test(f.name)||f.type==='text/csv'}
 function isJSON(f){return /\.json$/i.test(f.name)||f.type==='application/json'}
 function readFileText(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result||''));r.onerror=rej;r.readAsText(file,'utf-8')})}
 drop.addEventListener('drop',async e=>{
   e.preventDefault();drop.style.background='transparent';
-  const files=[...(e.dataTransfer?.files||[])];if(!files.length) return;
-  const csvs=files.filter(isCSV),jsons=files.filter(isJSON),imgs=files.filter(f=>/^image\//.test(f.type)||/\.(psd|tiff?|webp)$/i.test(f.name));
-  try{for(const f of csvs){const text=await readFileText(f);saveMap(rowsToMap(parseCSV(text)))}}catch(err){alert('CSV import failed: '+(err?.message||err))}
-  try{for(const f of jsons){const text=await readFileText(f);saveMap(normalizeJSON(JSON.parse(text)))}}catch(err){alert('JSON import failed: '+(err?.message||err))}
+  const files=[...(e.dataTransfer?.files||[])]; if(!files.length) return;
+  const csvs=files.filter(isCSV), jsons=files.filter(isJSON),
+        imgs=files.filter(f=>/^image\//.test(f.type)||/\.(psd|tiff?|webp)$/i.test(f.name));
+
+  try{for(const f of csvs){const text=await readFileText(f);saveMap(rowsToMap(parseCSV(text)))}}catch(err){alert('CSV-import feilet: '+(err?.message||err))}
+  try{for(const f of jsons){const text=await readFileText(f);saveMap(normalizeJSON(JSON.parse(text)))}}catch(err){alert('JSON-import feilet: '+(err?.message||err))}
   if(imgs.length) addImagesToPool(imgs);
-  renderMapChip()
 });
 
 /* ========= pools (scripts) ========= */
@@ -609,10 +691,8 @@ function buildTagPools(mapping){
   const tagsByExactLine   = new Map();
   const tagsBySizeLine    = new Map();
 
-  const keyExact = (lineId, size, variant) =>
-    (lineId ? `${lineId}|` : '') + `${size}|${variant || ''}`;
-  const keySize  = (lineId, size) =>
-    (lineId ? `${lineId}|` : '') + size;
+  const keyExact = (lineId, size, variant) => (lineId ? `${lineId}|` : '') + `${size}|${variant || ''}`;
+  const keySize  = (lineId, size) => (lineId ? `${lineId}|` : '') + size;
 
   let lineScopedCount = 0, globalCount = 0;
 
@@ -642,7 +722,7 @@ function buildTagPools(mapping){
   }
 
   const hasLineIds = lineScopedCount > 0;
-  LOG(`CSV map: line-scoped=${lineScopedCount}, global=${globalCount}`);
+  LOG(`CSV map: linje=${lineScopedCount}, global=${globalCount}`);
 
   return {
     hasLineIds,
@@ -671,16 +751,15 @@ function imageChoicesForEntry(entry){
   }
   return[]
 }
-function fileName(f){return(f&&f.name)?f.name:'(file)'}
+function fileName(f){return(f&&f.name)?f.name:'(fil)'}
 function tagLabel(entry){
-  if (!entry) return '(unknown)';
+  if (!entry) return '(ukjent)';
   if (typeof entry === 'string') return entry.slice(0,60) + (entry.length>60?'…':'');
-  return entry.name ? entry.name : '(unnamed creative)';
+  return entry.name ? entry.name : '(uten navn)';
 }
-
 function previewPlannedPlacements(byId) {
   const pools = buildTagPools(mapping);
-  LOG(`Mode: ${pools.hasLineIds ? 'Line-targeted (IDs in CSV).' : 'Global (no line IDs in CSV).'}`);
+  LOG(`Modus: ${pools.hasLineIds ? 'Linje-spesifikk (ID i CSV).' : 'Global (ingen linje-ID i CSV).'}`);
 
   for (const [id, arr] of byId.entries()) {
     const groups = new Map();
@@ -690,8 +769,8 @@ function previewPlannedPlacements(byId) {
       if (e.tile) groups.get(key).tiles.push(e.tile);
     }
 
-    LOG(`→ Preview ${id}`);
-    if (!groups.size) { LOG('   (no tiles detected)'); continue; }
+    LOG(`→ Forhåndsvis ${id}`);
+    if (!groups.size) { LOG('   (ingen fliser funnet)'); continue; }
 
     for (const { entry, tiles } of groups.values()) {
       const label = [entry.size, entry.variant, entry.side].filter(Boolean).join('/');
@@ -703,37 +782,33 @@ function previewPlannedPlacements(byId) {
       if (imgs.length) {
         const lines = tiles.map((_, i) => {
           const f = reuseAssets ? imgs[i % imgs.length] : (i < imgs.length ? imgs[i] : null);
-          return f ? `tile#${i+1} ← ${fileName(f)}` : `tile#${i+1} ← (no image)`;
+          return f ? `flis#${i+1} ← ${fileName(f)}` : `flis#${i+1} ← (ingen bilde)`;
         });
-        LOG(`   • ${label}  (images) ${tiles.length} tile(s)\n      ${lines.join('\n      ')}`);
+        LOG(`   • ${label}  (bilder) ${tiles.length} flis(er)\n      ${lines.join('\n      ')}`);
         continue;
       }
 
       let poolItems = pools.getExact(id, entry.size, entry.variant || null);
       let poolLabel = poolItems.length
-        ? (pools.maps.tagsByExactLine.has(pools.kExact(id, entry.size, entry.variant || null)) ? 'script line:exact' : 'script global:exact')
+        ? (pools.maps.tagsByExactLine.has(pools.kExact(id, entry.size, entry.variant || null)) ? 'script linje:eksakt' : 'script global:eksakt')
         : '';
 
       if (!poolItems.length) {
         poolItems = pools.getSize(id, entry.size);
         poolLabel = poolItems.length
-          ? (pools.maps.tagsBySizeLine.has(pools.kSize(id, entry.size)) ? 'script line:size' : 'script global:size')
+          ? (pools.maps.tagsBySizeLine.has(pools.kSize(id, entry.size)) ? 'script linje:størrelse' : 'script global:størrelse')
           : '';
       }
 
-      if (!poolItems.length) {
-        LOG(`   • ${label}  (no matching images or scripts)`);
-        continue;
-      }
+      if (!poolItems.length) { LOG(`   • ${label}  (ingen match på bilder eller scripts)`); continue; }
 
       const lines = tiles.map((_, i) => {
-        const payload = reuseAssets ? poolItems[i % poolItems.length]
-                                    : (i < poolItems.length ? poolItems[i] : null);
-        const nice = payload ? tagLabel(payload) : '(no script)';
-        return `tile#${i+1} ← ${nice}`;
+        const payload = reuseAssets ? poolItems[i % poolItems.length] : (i < poolItems.length ? poolItems[i] : null);
+        const nice = payload ? tagLabel(payload) : '(ingen script)';
+        return `flis#${i+1} ← ${nice}`;
       });
 
-      LOG(`   • ${label}  (scripts) ${tiles.length} tile(s)  pool=${poolLabel}\n      ${lines.join('\n      ')}`);
+      LOG(`   • ${label}  (scripts) ${tiles.length} flis(er)  pool=${poolLabel}\n      ${lines.join('\n      ')}`);
     }
   }
 }
@@ -743,7 +818,7 @@ let scanned=[]; let selected=new Set(G('ap3p_sel_ids',[]));
 function saveSelection(){S('ap3p_sel_ids',Array.from(selected))}
 function refreshList(){
   list.innerHTML='';
-  if(!scanned.length){list.innerHTML='<div class="muted">No items — run Scan.</div>';return}
+  if(!scanned.length){list.innerHTML='<div class="muted">Ingen funnet — trykk Skann.</div>';return}
   scanned.forEach(it=>{
     const row=d.createElement('label');row.className='item';
     const cb=d.createElement('input');cb.type='checkbox';cb.checked=selected.has(it.id);
@@ -757,89 +832,127 @@ btnAll.onclick=()=>{selected=new Set(scanned.map(s=>s.id));saveSelection();refre
 btnNone.onclick=()=>{selected=new Set();saveSelection();refreshList()};
 btnInv.onclick=()=>{const next=new Set();scanned.forEach(s=>{if(!selected.has(s.id)) next.add(s.id)});selected=next;saveSelection();refreshList()};
 
+let stopping=false;
+
 btnScan.onclick=async()=>{
   log.textContent='';
   scanned.length=0;
+
+  stopping=false;
+  btnRun.disabled=true; btnStop.disabled=false; btnScan.disabled=true;
+  showToast('Skanner…', 'Finner linjer og størrelser');
+
   const rows=findRows();
   const byId=new Map();
 
   for (const r of rows) {
+    if (stopping) break;
+
     await ensureCampaignView();
     await waitForIdle();
+
     const id  = rowId(r);
     const det = await expandRow(r);
+
     await waitForIdle();
     await ensureAllTilesMounted(det || d);
     await sleep(80);
+
     let entries = sizesFromExpanded(det);
     const prev = byId.get(id) || [];
     byId.set(id, prev.concat(entries));
+
     await sleep(40);
   }
 
   const report=[];
   for(const [id,arr] of byId.entries()){
     const pretty=prettyCounts(arr.map(({size,variant})=>({size,variant})));
-    LOG(`• ${id}  sizes:[${pretty||'-'}]`);
+    LOG(`• ${id}  størrelser:[${pretty||'-'}]`);
     const uniq=new Map();
-    for(const e of arr){const k=`${e.size}|${e.variant||''}|${e.side||''}`;if(!uniq.has(k)) uniq.set(k,{size:e.size,variant:e.variant,side:e.side})}
+    for(const e of arr){
+      const k=`${e.size}|${e.variant||''}|${e.side||''}`;
+      if(!uniq.has(k)) uniq.set(k,{size:e.size,variant:e.variant,side:e.side})
+    }
     report.push({id,entries:[...uniq.values()],label:pretty||'-'})
   }
-  LOG(`\nFound ${report.length} line items.`);
-  try{previewPlannedPlacements(byId)}catch(e){LOG('! Preview failed: '+(e?.message||e))}
+
+  LOG(`\nFant ${report.length} linje(r).`);
+  try{previewPlannedPlacements(byId)}catch(e){LOG('! Forhåndsvis feilet: '+(e?.message||e))}
+
   _lastPreview = byId;
   setInfo({items:report.length,done:0,hit:0,skip:0,err:0});
   scanned=report.slice();
   selected=new Set(report.map(r=>r.id));
-  saveSelection();
-  refreshList();
+  saveSelection(); refreshList();
+
+  btnRun.disabled=false; btnStop.disabled=true; btnScan.disabled=false;
+  showToast('Skann ferdig', `Linjer: ${report.length}`);
 };
 
 /* ========= run ========= */
-let stopping=false; btnStop.onclick=()=>{stopping=true;btnStop.disabled=true;btnRun.disabled=false};
+btnStop.onclick=()=>{
+  stopping=true;
+  btnStop.disabled=true;
+  btnRun.disabled=false;
+  showToast('Stopper…', 'Avbryter etter nåværende steg');
+};
+
 btnRun.onclick=()=>{
   const ids=[...new Set(scanned.filter(s=>selected.has(s.id)).map(s=>s.id))];
-  if(!ids.length){LOG('No items selected — run Scan and tick rows to include.');return}
-  if(!mapping.length&&imagePool.size===0){LOG('No mapping loaded — import CSV/JSON or images first.');return}
+  if(!ids.length){LOG('Ingen valgt — trykk Skann og velg linjer.');return}
+  if(!mapping.length&&imagePool.size===0){LOG('Ingen mapping — importer CSV/JSON eller bilder først.');return}
   runOnIds(ids)
 };
 
 async function runOnIds(ids){
-  stopping=false;btnRun.disabled=true;btnStop.disabled=false;
+  stopping=false;
+  btnRun.disabled=true; btnStop.disabled=false; btnScan.disabled=true;
   const stats={items:ids.length,done:0,hit:0,skip:0,err:0};setInfo(stats);
-  LOG(`Starting… (${ids.length} items)`);
+  LOG(`Starter… (${ids.length} linje(r))`);
+  showToast('Autofyll startet', `Linjer: ${ids.length}`);
   const pools=buildTagPools(mapping);
 
   for(const id of ids){
     if(stopping) break;
+
     try{
       const rowsForId=findRowsByIdAll(id);
       const detailsList=[];
       let liveEntries=[];
 
       for(const r of rowsForId){
+        if(stopping) break;
+
         await ensureCampaignView();
         const det = await expandRow(r);
         await waitForIdle();
         await ensureAllTilesMounted(det || d);
         await sleep(80);
+
         if (det) detailsList.push(det);
-        liveEntries = liveEntries.concat(sizesFromExpanded(det))
+        liveEntries = liveEntries.concat(sizesFromExpanded(det));
       }
 
       const uniq=new Map();
-      for(const e of liveEntries){const k=`${e.size}|${e.variant||''}|${e.side||''}`;if(!uniq.has(k)) uniq.set(k,{size:e.size,variant:e.variant,side:e.side})}
+      for(const e of liveEntries){
+        const k=`${e.size}|${e.variant||''}|${e.side||''}`;
+        if(!uniq.has(k)) uniq.set(k,{size:e.size,variant:e.variant,side:e.side})
+      }
       const entries=[...uniq.values()];
-      LOG(`→ ${id} sizes:[${prettyCounts(entries)||'—'}]`);
+
+      LOG(`→ ${id} størrelser:[${prettyCounts(entries)||'—'}]`);
       if(!entries.length){stats.skip++;stats.done++;setInfo(stats);continue}
 
       let wrote=false;
 
       for(const entry of entries){
+        if(stopping) break;
+
         await ensureCampaignView();
         await waitForIdle();
 
-        let tiles=[];
+        let tiles = [];
         for (const det of detailsList) tiles = tiles.concat(pickTilesForEntry(det, entry));
         tiles = Array.from(new Set(tiles));
 
@@ -851,33 +964,31 @@ async function runOnIds(ids){
         }
 
         if (!tiles.length) {
-          LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''} (no tile match)`);
+          LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''} (ingen fliser)`);
           continue;
         }
 
-        // ----- images -----
+        // Images first
         const imgs = imageChoicesForEntry(entry);
         if (imgs.length) {
           let placed = 0;
           for (let i = 0; i < tiles.length; i++) {
+            if(stopping) break;
             const t = tiles[i];
             const f = reuseImages ? imgs[i % imgs.length] : (i < imgs.length ? imgs[i] : null);
             if (!f) continue;
+
             t.scrollIntoView({ block: 'center' });
             let ok = await uploadImageToTile(t, f);
-            if (!ok) {
-              const alt = (t.closest('.set-creativeContainer') || document).querySelector('input[type="file"]');
-              if (alt) ok = await uploadImageToInput(alt, f);
-            }
             await sleep(160);
-            placed++;
+            if(ok) placed++;
           }
-          LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''}  placed images=${placed}${placed<tiles.length?` (skipped ${tiles.length-placed})`:''}`);
+          LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''}  lagt inn bilder=${placed}${placed<tiles.length?` (hoppet over ${tiles.length-placed})`:''}`);
           wrote = placed > 0 || wrote;
           continue;
         }
 
-        // ----- scripts (line-aware pool) -----
+        // Scripts
         const exactLine = pools.getExact(id, entry.size, entry.variant || null);
         const sizeLine  = pools.getSize(id, entry.size);
         const exactAny  = pools.getExact(null, entry.size, entry.variant || null);
@@ -885,81 +996,70 @@ async function runOnIds(ids){
 
         let list, pool;
         if (pools.hasLineIds) {
-          if (exactLine.length) { list = exactLine; pool = 'line:exact'; }
-          else if (sizeLine.length) { list = sizeLine; pool = 'line:size'; }
-          else if (exactAny.length) { list = exactAny; pool = 'global:exact'; }
-          else { list = sizeAny; pool = 'global:size'; }
+          if (exactLine.length) { list = exactLine; pool = 'linje:eksakt'; }
+          else if (sizeLine.length) { list = sizeLine; pool = 'linje:størrelse'; }
+          else if (exactAny.length) { list = exactAny; pool = 'global:eksakt'; }
+          else { list = sizeAny; pool = 'global:størrelse'; }
         } else {
           list = exactAny.length ? exactAny : sizeAny;
-          pool = exactAny.length ? 'global:exact' : 'global:size';
+          pool = exactAny.length ? 'global:eksakt' : 'global:størrelse';
         }
 
         if (!list || !list.length) {
-          LOG(`   • ${entry.size}${entry.variant?('/'+entry.variant):''} (no tags for this size/line)`);
+          LOG(`   • ${entry.size}${entry.variant?('/'+entry.variant):''} (ingen script for denne størrelsen/linjen)`);
           continue;
         }
 
-        LOG(`   • ${entry.size}${entry.variant?('/'+entry.variant):''}  tiles=${tiles.length}, pool=${pool}, tags=${list.length}`);
+        LOG(`   • ${entry.size}${entry.variant?('/'+entry.variant):''}  fliser=${tiles.length}, pool=${pool}, scripts=${list.length}`);
 
         let used = 0, skipped = 0;
 
-        // ✅ FIXED: single selection flow, checkpointing, and LOG outside loop
         for (let i = 0; i < tiles.length; i++) {
-          if (i > 0 && (i % 8 === 0)) await checkpoint(`tile ${i}/${tiles.length}`);
+          if(stopping) break;
 
-          const payload = reuseAssets ? list[i % list.length]
-                                      : (i < list.length ? list[i] : null);
+          const payload = reuseAssets ? list[i % list.length] : (i < list.length ? list[i] : null);
           if (!payload) { skipped++; continue; }
 
-          await ensureCampaignView();
-          await waitForIdle(12000);
+          if (i > 0 && (i % 8 === 0)) await checkpoint(`flis ${i}/${tiles.length}`);
 
+          await ensureCampaignView();
+          await waitForIdle();
           await selectTile(tiles[i]);
 
-          if (!(await ensureCampaignView())) {
-            LOG('   ! Lost campaign view; going back…');
-            await sleep(250);
-            await ensureCampaignView();
-            await waitForIdle(8000);
-            await selectTile(tiles[i]);
-          }
-
           const editor = await open3PTab();
-          if (!editor) { LOG('   ! 3rd-party editor not found'); stats.err++; continue; }
+          if (!editor) { LOG('   ! Fant ikke 3rd-party editor'); stats.err++; continue; }
 
           const tagStr = (typeof payload === 'string') ? payload : (payload?.tag || '');
-
           const pasted = await pasteWithVerify(editor, tagStr, 2);
-          if (!pasted) {
-            LOG('   ! Paste did not stick after retries — skipping this tile');
-            stats.err++;
-            continue;
-          }
+          if (!pasted) { LOG('   ! Lim inn festet ikke (etter retries) — hopper over flis'); stats.err++; continue; }
 
           used++;
 
           if (G('ap3p_auto', true)) {
             const saved = await saveWithRetry(editor, 2);
-            if (!saved) LOG('   ! Save/Update/Reprocess failed or not found (continuing)');
+            if (!saved) LOG('   ! Lagre/Oppdater/Send inn på nytt feilet (fortsetter)');
           }
 
           await sleep(160);
         }
 
-        LOG(`     → used scripts=${used}${skipped?` (skipped ${skipped})`:''}`);
+        LOG(`     → brukt scripts=${used}${skipped?` (hoppet over ${skipped})`:''}`);
         wrote = used > 0 || wrote;
       }
 
       if(wrote) stats.hit++; else stats.skip++;
-      stats.done++; setInfo(stats); await sleep(160);
+      stats.done++; setInfo(stats);
+      await sleep(160);
+
     }catch(e){
-      LOG('   ! error: '+(e&&e.message?e.message:e));
+      LOG('   ! feil: '+(e&&e.message?e.message:e));
       stats.err++;stats.done++;setInfo(stats)
     }
   }
 
-  LOG(`Done. Items=${stats.items}  Hit=${stats.hit}  Skip=${stats.skip}  Err=${stats.err}`);
-  btnStop.disabled=true; btnRun.disabled=false;
+  LOG(`Ferdig. Linjer=${stats.items}  Treff=${stats.hit}  Hoppet=${stats.skip}  Feil=${stats.err}`);
+  showToast('Ferdig', `Treff: ${stats.hit} • Feil: ${stats.err}`);
+  btnStop.disabled=true; btnRun.disabled=false; btnScan.disabled=false;
 }
 
 /* ========= niceties ========= */
@@ -983,7 +1083,6 @@ function findBackToCampaignButton(){
   }
   return null;
 }
-
 async function ensureCampaignView(){
   if (inCampaignTableView()) return true;
   const back = findBackToCampaignButton();
@@ -994,7 +1093,6 @@ async function ensureCampaignView(){
   }
   return inCampaignTableView();
 }
-
 async function waitForIdle(timeout=12000){
   const start = Date.now();
   while (Date.now() - start < timeout) {
@@ -1017,4 +1115,4 @@ async function waitForIdle(timeout=12000){
   return true;
 }
 
-}catch(e){console.error(e);alert('Autofill error: '+(e&&e.message?e.message:e));}})();
+}catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
