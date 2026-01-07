@@ -569,7 +569,7 @@ const reuseCb = document.createElement('input');
 reuseCb.type='checkbox';
 reuseCb.checked = reuseAssets;
 const reuseTxt = document.createElement('span');
-reuseTxt.textContent = 'Fyll alle størrelser (gjenbruk bilder/scripts)';
+reuseTxt.textContent = 'Gjenbruk';
 reuseWrap.append(reuseCb, reuseTxt);
 body.insertBefore(reuseWrap, drop);
 
@@ -1425,3 +1425,4 @@ async function waitForIdle(timeout=12000){
 }
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
+
