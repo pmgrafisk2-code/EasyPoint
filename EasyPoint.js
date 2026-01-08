@@ -1485,5 +1485,3 @@ async function waitForIdle(timeout=12000){
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
 
-
-
