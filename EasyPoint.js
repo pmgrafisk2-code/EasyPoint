@@ -658,7 +658,7 @@ const reuseCb = document.createElement('input');
 reuseCb.type='checkbox';
 reuseCb.checked = reuseAssets;
 const reuseTxt = document.createElement('span');
-reuseTxt.textContent = 'Gjenbruk';
+reuseTxt.textContent = 'Gjenbruk samme scripts for å fylle alt';
 reuseWrap.append(reuseCb, reuseTxt);
 body.insertBefore(reuseWrap, drop);
 
@@ -695,7 +695,7 @@ const owCb = document.createElement('input');
 owCb.type='checkbox';
 owCb.checked = (overwriteMode === 'all');
 const owTxt = document.createElement('span');
-owTxt.textContent = 'Erstatt alle størrelser';
+owTxt.textContent = 'Erstatt materiell hvis det finnes allerede';
 owWrap.append(owCb, owTxt);
 body.insertBefore(owWrap, drop);
 
@@ -1484,4 +1484,5 @@ async function waitForIdle(timeout=12000){
 })();
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
+
 
