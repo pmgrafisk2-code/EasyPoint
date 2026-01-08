@@ -591,7 +591,7 @@ const addCb = document.createElement('input');
 addCb.type='checkbox';
 addCb.checked = addExtraSizes;
 const addTxt = document.createElement('span');
-addTxt.textContent = 'Legg til ekstra størrelser (hvis flere scripts enn fliser)';
+addTxt.textContent = 'Tillat å legge til størrelser (hvis flere scripts enn plasser)';
 addWrap.append(addCb, addTxt);
 body.insertBefore(addWrap, drop);
 
@@ -883,7 +883,7 @@ function previewPlannedPlacements(byId) {
   let addTotal = 0;
   plannedAdds.forEach(v=>v.forEach(x=>addTotal+=x.need));
   if(addTotal){
-    LOG(`\nPLAN: Legg til ekstra fliser totalt: ${addTotal}`);
+    LOG(`\nPLAN: Legg til ekstra størrelser totalt: ${addTotal}`);
     for(const [id, adds] of plannedAdds.entries()){
       const txt = adds.map(a=>`${a.size}${a.variant?'/'+a.variant:''}×${a.need}`).join(', ');
       LOG(`  • ${id}: ${txt}`);
@@ -1425,6 +1425,7 @@ async function waitForIdle(timeout=12000){
 }
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
+
 
 
 
