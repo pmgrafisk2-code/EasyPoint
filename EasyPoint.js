@@ -713,7 +713,7 @@ function syncReuseWithAddExtra(){
     reuseAssets = false;
     reuseCb.checked = false;
     reuseCb.disabled = true;
-    reuseTxt.textContent = 'Gjenbruk (låst av når “legg til ekstra” er på)';
+    reuseTxt.textContent = 'Gjenbruk';
     S(REUSE_KEY_NEW, reuseAssets);
   }else{
     reuseCb.disabled = false;
@@ -1484,3 +1484,4 @@ async function waitForIdle(timeout=12000){
 })();
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
+
