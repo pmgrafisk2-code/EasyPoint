@@ -364,6 +364,7 @@ async function checkpoint(label=''){
   await waitForIdle(15000);
   if (label) LOG(`   · sjekkpunkt ${label}`);
 }
+
 function isEmpty3PValue(v){ return !String(v||'').trim(); }
 
 /* ========= UI ========= */
@@ -411,31 +412,9 @@ function isEmpty3PValue(v){ return !String(v||'').trim(); }
   d.head.appendChild(st)
 })();
 
-/* ===== Window state (size/pos) ===== */
-const UI_STATE_KEY='ap3p_ui_state_v1';
-function clamp(n,min,max){return Math.max(min,Math.min(max,n))}
-function loadUIState(){
-  const st=G(UI_STATE_KEY,null);
-  if(!st||typeof st!=='object') return null;
-  return st;
-}
-function saveUIState(){
-  try{
-    const r=ui.getBoundingClientRect();
-    const st={
-      left: Math.round(r.left),
-      top:  Math.round(r.top),
-      w:    Math.round(r.width),
-      h:    Math.round(r.height),
-      min:  ui.getAttribute('data-min')==='1'
-    };
-    S(UI_STATE_KEY, st);
-  }catch{}
-}
-
 let ui=d.getElementById('ap3p_bar'); if(ui) ui.remove();
 ui=d.createElement('div'); ui.id='ap3p_bar';
-ui.style.cssText='position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#0e0f13;color:#e6e6e6;border:1px solid #2a2d37;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.45);max-width:96vw;min-width:520px;max-height:90vh;';
+ui.style.cssText='position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#0e0f13;color:#e6e6e6;border:1px solid #2a2d37;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.45);min-width:640px;max-width:96vw;';
 
 const hdr=d.createElement('div');
 hdr.style.cssText='cursor:move;user-select:none;display:flex;align-items:center;gap:10px;padding:8px 10px;background:#161922;border-radius:12px 12px 0 0;border-bottom:1px solid #2a2d37';
@@ -458,7 +437,7 @@ const info=d.createElement('span'); info.textContent='Linjer: —'; info.style.o
 const btnCSV=d.createElement('button'); btnCSV.textContent='Importer CSV/JSON'; btnCSV.style.cssText='cursor:pointer;border:1px solid #2a2d37;border-radius:8px;padding:6px 10px;background:#1a1d27;color:#e6e6e6';
 const btnPaste=d.createElement('button'); btnPaste.textContent='Lim inn fra Excel'; btnPaste.style.cssText='cursor:pointer;border:1px solid #2a2d37;border-radius:8px;padding:6px 10px;background:#1a1d27;color:#e6e6e6';
 const file=d.createElement('input'); file.type='file'; file.accept='.csv,.json,.txt'; file.style.display='none';
-const drop=d.createElement('div'); drop.textContent='Slipp CSV/JSON/bilder her'; drop.style.cssText='flex:1 1 100%;border:1px dashed #3a3f52;border-radius:8px;height:56px;display:flex;align-items:center;justify-content:center;opacity:.9';
+const drop=d.createElement('div'); drop.textContent='Slipp CSV/JSON/bilder her'; drop.style.cssText='flex:1 1 100%;border:1px dashed #3a3f52;border-radius:8px;height:64px;display:flex;align-items:center;justify-content:center;opacity:.9';
 const listWrap=d.createElement('div'); listWrap.style.cssText='flex:1 1 100%';
 const listCtrls=d.createElement('div'); listCtrls.id='ap3p_list_ctrls'; listCtrls.style.cssText='display:flex;align-items:center;gap:8px;margin:2px 0 4px 0;opacity:.9';
 const btnAll=d.createElement('button'); btnAll.textContent='Velg alle';
@@ -466,40 +445,14 @@ const btnNone=d.createElement('button'); btnNone.textContent='Velg ingen';
 const btnInv=d.createElement('button'); btnInv.textContent='Inverter';
 [btnAll,btnNone,btnInv].forEach(b=>b.style.cssText='cursor:pointer;border:1px solid #2a2d37;border-radius:6px;padding:4px 8px;background:#1a1d27;color:#e6e6e6');
 listCtrls.append(btnAll,btnNone,btnInv);
-const list=d.createElement('div'); list.id='ap3p_list'; list.style.cssText='max-height:160px;overflow:auto;background:#0b0c10;border:1px solid #1b1e28;border-radius:8px;padding:6px';
+const list=d.createElement('div'); list.id='ap3p_list'; list.style.cssText='max-height:180px;overflow:auto;background:#0b0c10;border:1px solid #1b1e28;border-radius:8px;padding:6px';
 listWrap.append(listCtrls,list);
-const log=d.createElement('div'); log.style.cssText='height:200px;overflow:auto;background:#0b0c10;border-top:1px solid #1b1e28;border-radius:0 0 12px 12px;padding:8px 10px;font-family:ui-monospace,Consolas,monospace;white-space:pre-wrap';
+const log=d.createElement('div'); log.style.cssText='height:220px;overflow:auto;background:#0b0c10;border-top:1px solid #1b1e28;border-radius:0 0 12px 12px;padding:8px 10px;font-family:ui-monospace,Consolas,monospace;white-space:pre-wrap';
 ui.append(hdr,body,listWrap,log); d.body.appendChild(ui);
 
 const LOG=m=>{log.textContent+=m+'\n'; log.scrollTop=log.scrollHeight;};
 const setInfo=o=>{info.textContent=`Linjer:${o.items}  Ferdig:${o.done}  Treff:${o.hit}  Hoppet:${o.skip}  Feil:${o.err}`};
 body.append(info,btnCSV,btnPaste,file,drop);
-
-/* ===== Apply saved UI state (don’t auto-bloat) ===== */
-(function applyInitialUIState(){
-  const st=loadUIState();
-  const defW=660, defH=520;
-  const vw=Math.max(520, Math.min(defW, Math.floor(window.innerWidth*0.92)));
-  const vh=Math.max(260, Math.min(defH, Math.floor(window.innerHeight*0.85)));
-
-  if(st?.w && st?.h){
-    const ww=clamp(st.w, 520, Math.floor(window.innerWidth*0.96));
-    const hh=clamp(st.h, 160, Math.floor(window.innerHeight*0.90));
-    ui.style.width=ww+'px';
-    ui.style.height=hh+'px';
-  }else{
-    ui.style.width=vw+'px';
-    ui.style.height=vh+'px';
-  }
-
-  if(typeof st?.left==='number' && typeof st?.top==='number'){
-    const ww=parseInt(ui.style.width,10)||ui.getBoundingClientRect().width;
-    const hh=parseInt(ui.style.height,10)||ui.getBoundingClientRect().height;
-    ui.style.left=clamp(st.left, 6, Math.floor(window.innerWidth-ww-6))+'px';
-    ui.style.top =clamp(st.top,  6, Math.floor(window.innerHeight-hh-6))+'px';
-    ui.style.right='auto'; ui.style.bottom='auto';
-  }
-})();
 
 /* ===== UX: toast + flash ===== */
 let toast = d.getElementById('ap3p_toast');
@@ -526,6 +479,41 @@ function flash(el){
   el.classList.add('ap3p-flash');
 }
 
+/* ===== Persist UI (pos/size) ===== */
+const UI_STATE_KEY='ap3p_ui_state_v1';
+function readUiState(){ return G(UI_STATE_KEY,null); }
+function clamp(n,min,max){ n=Number(n); if(!isFinite(n)) return null; return Math.max(min, Math.min(max, n)); }
+function applyUiState(){
+  const st = readUiState();
+  if(!st) return;
+
+  // Only apply if reasonable
+  const vw = Math.max(640, w.innerWidth || 1200);
+  const vh = Math.max(400, w.innerHeight || 800);
+
+  const width  = clamp(st.w, 420, vw-20);
+  const height = clamp(st.h, 140, vh-20);
+  const left   = clamp(st.l, 0, vw-60);
+  const top    = clamp(st.t, 0, vh-40);
+
+  ui.style.right='auto';
+  ui.style.bottom='auto';
+
+  if(width)  ui.style.width  = width+'px';
+  if(height) ui.style.height = height+'px';
+  if(left!=null) ui.style.left = left+'px';
+  if(top!=null)  ui.style.top  = top+'px';
+}
+function saveUiState(){
+  const r = ui.getBoundingClientRect();
+  S(UI_STATE_KEY,{
+    l: Math.round(r.left),
+    t: Math.round(r.top),
+    w: Math.round(r.width),
+    h: Math.round(r.height)
+  });
+}
+
 /* ===== Drag, Resize, Minimize, Close ===== */
 function adjustHeights(totalH){
   if(ui.getAttribute('data-min')==='1') return;
@@ -549,12 +537,12 @@ function adjustHeights(totalH){
     box.style.right='auto'; box.style.bottom='auto';
   });
   w.addEventListener('pointermove',e=>{
-    if(!drag)return;
+    if(!drag) return;
     box.style.left=(ox+e.clientX-sx)+'px';
     box.style.top =(oy+e.clientY-sy)+'px';
   });
   w.addEventListener('pointerup',()=>{
-    if(drag){ drag=false; saveUIState(); }
+    if(drag){ drag=false; saveUiState(); }
   });
 })(hdr,ui);
 
@@ -563,7 +551,7 @@ function adjustHeights(totalH){
   dirs.forEach(dn=>{const h=d.createElement('div');h.className='aprs aprs-'+dn;box.appendChild(h);els[dn]=h;});
   let rs=null;
   function onDown(e,dir){
-    if(e.button!==0)return;
+    if(e.button!==0) return;
     e.preventDefault();
     const r=box.getBoundingClientRect();
     rs={dir,sx:e.clientX,sy:e.clientY,x:r.left,y:r.top,w:r.width,h:r.height};
@@ -571,21 +559,23 @@ function adjustHeights(totalH){
     w.addEventListener('pointerup',onUp);
   }
   function onMove(e){
-    if(!rs)return;
-    const dx=e.clientX-rs.sx, dy=e.clientY-rs.sy; let x=rs.x,y=rs.y,wv=rs.w,hv=rs.h;
-    if(/e/.test(rs.dir)) wv=Math.max(520,rs.w+dx);
-    if(/s/.test(rs.dir)) hv=Math.max(180,rs.h+dy);
-    if(/w/.test(rs.dir)){ wv=Math.max(520,rs.w-dx); x=rs.x+dx; }
-    if(/n/.test(rs.dir)){ hv=Math.max(180,rs.h-dy); y=rs.y+dy; }
+    if(!rs) return;
+    const dx=e.clientX-rs.sx, dy=e.clientY-rs.sy;
+    let x=rs.x,y=rs.y,wv=rs.w,hv=rs.h;
+    if(/e/.test(rs.dir)) wv=Math.max(420,rs.w+dx);
+    if(/s/.test(rs.dir)) hv=Math.max(140,rs.h+dy);
+    if(/w/.test(rs.dir)){ wv=Math.max(420,rs.w-dx); x=rs.x+dx; }
+    if(/n/.test(rs.dir)){ hv=Math.max(140,rs.h-dy); y=rs.y+dy; }
     Object.assign(box.style,{width:wv+'px',height:hv+'px',left:x+'px',top:y+'px',right:'auto',bottom:'auto'});
     adjustHeights(hv);
   }
   function onUp(){
-    if(!rs) return;
-    rs=null;
+    if(rs){
+      rs=null;
+      saveUiState();
+    }
     w.removeEventListener('pointermove',onMove);
     w.removeEventListener('pointerup',onUp);
-    saveUIState();
   }
   dirs.forEach(dn=>els[dn].addEventListener('pointerdown',e=>onDown(e,dn)));
   box._resizerEls=Object.values(els);
@@ -604,19 +594,17 @@ function setMinimized(min){
   }else{
     (ui._resizerEls||[]).forEach(el=>el.style.display='');
     btnMin.textContent='–';
-    const h=ui.getBoundingClientRect().height;
+    const h = ui.getBoundingClientRect().height;
     adjustHeights(h);
   }
-  saveUIState();
+  saveUiState();
 }
 btnMin.onclick=()=>setMinimized(ui.getAttribute('data-min')!=='1');
 
 let _bestiltInt=null;
-btnX.onclick=()=>{
-  if(_bestiltInt) clearInterval(_bestiltInt);
-  ui.remove(); toast?.remove?.();
-};
+btnX.onclick=()=>{ if(_bestiltInt) clearInterval(_bestiltInt); ui.remove(); toast?.remove?.(); };
 
+applyUiState();
 adjustHeights(ui.getBoundingClientRect().height);
 
 /* ========= mapping state ========= */
@@ -652,17 +640,18 @@ const REUSE_KEY_NEW = 'ap3p_reuse_assets';
 const REUSE_KEY_OLD = 'ap3p_reuse_images';
 let reuseAssets = G(REUSE_KEY_NEW, G(REUSE_KEY_OLD, true)); // default ON
 
+let _lastPreview = null;
+
+// Gjenbruk
 const reuseWrap = document.createElement('label');
 reuseWrap.style.cssText='display:flex;align-items:center;gap:6px;margin-left:8px;font-size:12px;opacity:.95';
 const reuseCb = document.createElement('input');
 reuseCb.type='checkbox';
 reuseCb.checked = reuseAssets;
 const reuseTxt = document.createElement('span');
-reuseTxt.textContent = 'Gjenbruk samme scripts for å fylle alt';
+reuseTxt.textContent = 'Gjenbruk';
 reuseWrap.append(reuseCb, reuseTxt);
 body.insertBefore(reuseWrap, drop);
-
-let _lastPreview = null;
 
 reuseCb.onchange = () => {
   reuseAssets = reuseCb.checked;
@@ -671,7 +660,7 @@ reuseCb.onchange = () => {
   if (_lastPreview) { log.textContent=''; previewPlannedPlacements(_lastPreview); }
 };
 
-// Legg til ekstra størrelser (failsafe: kun hvis størrelsen finnes i CSV)
+// Legg til ekstra størrelser
 const ADD_KEY = 'ap3p_add_extra_sizes';
 let addExtraSizes = !!G(ADD_KEY, false);
 
@@ -685,7 +674,7 @@ addTxt.textContent = 'Tillat å legge til størrelser (hvis flere scripts enn pl
 addWrap.append(addCb, addTxt);
 body.insertBefore(addWrap, drop);
 
-// Erstatt-modus: alle vs kun tomme
+// Erstatt-modus
 const OVERWRITE_KEY = 'ap3p_overwrite_mode'; // 'all' | 'empty'
 let overwriteMode = G(OVERWRITE_KEY, 'empty');
 
@@ -695,7 +684,7 @@ const owCb = document.createElement('input');
 owCb.type='checkbox';
 owCb.checked = (overwriteMode === 'all');
 const owTxt = document.createElement('span');
-owTxt.textContent = 'Erstatt materiell hvis det finnes allerede';
+owTxt.textContent = 'Erstatt alle størrelser';
 owWrap.append(owCb, owTxt);
 body.insertBefore(owWrap, drop);
 
@@ -707,23 +696,16 @@ owCb.onchange = () => {
 };
 
 function syncReuseWithAddExtra(){
-  // Når add-extra er AV: sunn default => gjenbruk PÅ (kan endres av bruker)
-  // Når add-extra er PÅ: legg-til gir bare mening om gjenbruk er AV, så vi tvinger AV + låser
-  if(addExtraSizes){
-    reuseAssets = false;
-    reuseCb.checked = false;
+  // Når add-extra er AV: tving gjenbruk PÅ (sunn default)
+  if(!addExtraSizes){
+    reuseAssets = true;
+    reuseCb.checked = true;
     reuseCb.disabled = true;
-    reuseTxt.textContent = 'Gjenbruk';
     S(REUSE_KEY_NEW, reuseAssets);
   }else{
     reuseCb.disabled = false;
-    reuseTxt.textContent = 'Gjenbruk';
-    // (behold reuseAssets som brukeren har valgt)
-    reuseAssets = !!G(REUSE_KEY_NEW, true);
-    reuseCb.checked = reuseAssets;
   }
 }
-
 addCb.onchange = () => {
   addExtraSizes = addCb.checked;
   S(ADD_KEY, addExtraSizes);
@@ -886,7 +868,8 @@ function buildTagPools(mapping){
     getSize(lineId, size){
       const kLine = keySize(lineId, size);
       return (tagsBySizeLine.get(kLine) || tagsBySizeGlobal.get(size) || []);
-    }
+    },
+    maps: { tagsByExactGlobal, tagsBySizeGlobal, tagsByExactLine, tagsBySizeLine }
   };
 }
 
@@ -907,11 +890,14 @@ function tagLabel(entry){
   return entry.name ? entry.name : '(uten navn)';
 }
 
+// Plan for "legg til ekstra størrelser":
+// - Bare når addExtraSizes==true
+// - Bare når reuseAssets==false (ellers gir det sjelden mening)
+// - Bare for størrelser som finnes i CSV (failsafe)
 function countPlannedAdds(byId){
-  // Kun meningsfullt når addExtraSizes==true (og da er reuse låst AV)
-  if(!addExtraSizes) return new Map();
   const pools = buildTagPools(mapping);
   const planned = new Map(); // id -> [{size,variant,need}]
+  const reuse = reuseAssets;
 
   for(const [id, arr] of byId.entries()){
     // count current tiles per size|variant|side
@@ -921,7 +907,8 @@ function countPlannedAdds(byId){
       tileCounts.set(key, (tileCounts.get(key)||0) + 1);
     }
 
-    const uniqSizes = new Map(); // size|variant -> {size,variant}
+    // count scripts available per size|variant (line-aware preferred, then global)
+    const uniqSizes = new Map(); // key size|variant -> {size,variant}
     for(const e of arr){
       const k = `${e.size}|${e.variant||''}`;
       if(!uniqSizes.has(k)) uniqSizes.set(k, {size:e.size,variant:e.variant||null});
@@ -929,7 +916,6 @@ function countPlannedAdds(byId){
 
     const adds=[];
     for(const sv of uniqSizes.values()){
-      // scripts for this line+size(+variant), fallback chain like run
       const exactLine = pools.getExact(id, sv.size, sv.variant||null);
       const sizeLine  = pools.getSize(id, sv.size);
       const exactAny  = pools.getExact(null, sv.size, sv.variant||null);
@@ -948,12 +934,15 @@ function countPlannedAdds(byId){
         if(sz===sv.size && (vr||'')===(sv.variant||'')) tilesCount += n;
       }
 
-      const need = Math.max(0, scriptsCount - tilesCount);
-      if(need>0) adds.push({size:sv.size,variant:sv.variant||null,need});
+      if(addExtraSizes && !reuse){
+        const need = Math.max(0, scriptsCount - tilesCount);
+        if(need>0) adds.push({size:sv.size,variant:sv.variant||null,need});
+      }
     }
 
     if(adds.length) planned.set(id, adds);
   }
+
   return planned;
 }
 
@@ -1112,108 +1101,78 @@ btnRun.onclick=()=>{
   runOnIds(ids)
 };
 
-/* ========= (BEST EFFORT) add extra tiles ========= */
-function findOptionalMaterialArea(){
-  const needles = ['valgfri materiell','optional material','legg til'];
-  const blocks = [...document.querySelectorAll('div,section,aside')].filter(el=>vis(el));
-  for(const b of blocks){
-    const t=(b.innerText||'').toLowerCase();
-    if(needles.some(n=>t.includes(n))) return b;
-  }
-  return document.body;
-}
-async function tryAddTileOfSize(sizeStr){
-  const sizePretty = sizeStr.replace('x','×');
-  const root = findOptionalMaterialArea();
+/* ========= (BEST EFFORT) add extra sizes via menu ========= */
+function findAddOptionalPlaceholderButton(root=document){
+  const btns=[...root.querySelectorAll('button')].filter(vis);
+  const rx=/legg\s*til\s*(valgfri\s*materiell|valgfri\s*placeholder|valgfri\s*kreativ|valgfri)|add\s*optional\s*(creative\s*)?placeholder|add\s*optional\s*creative|add\s*optional/i;
 
-  const addBtns = [...root.querySelectorAll('button')].filter(vis).filter(b=>{
-    const t=(b.innerText||'').toLowerCase().trim();
-    return /legg\s*til|add/.test(t);
+  let best=null, bestScore=-1;
+  for(const b of btns){
+    const t=((b.innerText||'')+'').trim().toLowerCase();
+    if(!t) continue;
+    if(!rx.test(t)) continue;
+
+    let score=10;
+    if(/MuiButton/.test(b.className||'')) score+=2;
+    if(/outlined/i.test(b.className||'')) score+=1;
+    if(/optional/.test(t)) score+=1;
+    if(/valgfri/.test(t)) score+=1;
+
+    if(score>bestScore){ bestScore=score; best=b; }
+  }
+  return best;
+}
+
+function findMenu(){
+  const menus=[...document.querySelectorAll('[role="menu"], [role="listbox"], .MuiMenu-list')].filter(vis);
+  // prefer actual role=menu
+  return menus.find(m=>m.getAttribute('role')==='menu') || menus[0] || null;
+}
+
+function menuItems(menu){
+  if(!menu) return [];
+  const items=[...menu.querySelectorAll('[role="menuitem"], [role="option"], li, button, div')].filter(vis);
+  // filter away huge wrappers with no text
+  return items.filter(it => (it.innerText||it.textContent||'').trim().length>0);
+}
+
+async function tryAddSizeFromMenu(sizeStr){
+  // sizeStr normalized: "580x500"
+  const menu = await waitFor(()=>findMenu(), 2500, 60);
+  if(!menu) return false;
+
+  const items=menuItems(menu);
+  const pretty=sizeStr.replace('x','×');
+
+  const hit = items.find(it=>{
+    const t = cs(it.innerText||it.textContent||'');
+    return t.includes(sizeStr) || t.includes(cs(pretty));
   });
 
-  const candidates = [];
-  for(const b of addBtns){
-    const wrap = b.closest('div') || root;
-    const combos = [...wrap.querySelectorAll('[role="combobox"], select, input')].filter(vis);
-    candidates.push({btn:b, combos, wrap});
-  }
+  if(!hit) return false;
 
-  for(const c of candidates){
-    const combo = c.combos.find(x=>x.matches('[role="combobox"]')) || c.combos.find(x=>x.tagName==='SELECT') || c.combos.find(x=>x.tagName==='INPUT');
-    if(!combo) continue;
-
-    if(combo.tagName==='SELECT'){
-      const opts=[...combo.querySelectorAll('option')];
-      const hit=opts.find(o=>cs(o.textContent||'')===sizeStr || cs(o.value||'')===sizeStr || cs(o.textContent||'').includes(sizeStr));
-      if(!hit) continue;
-      combo.value = hit.value;
-      combo.dispatchEvent(new Event('input',{bubbles:true}));
-      combo.dispatchEvent(new Event('change',{bubbles:true}));
-      await sleep(80);
-      c.btn.click();
-      await sleep(450);
-      return true;
-    }
-
-    try{
-      combo.scrollIntoView({block:'center'});
-      combo.click();
-      await sleep(160);
-    }catch{}
-
-    const menu = await waitFor(()=>{
-      const m = document.querySelector('[role="listbox"], .MuiPopover-root, .MuiMenu-list, [role="presentation"]');
-      return m && vis(m) ? m : null;
-    }, 1200, 60);
-
-    if(!menu) continue;
-
-    const items = [...menu.querySelectorAll('[role="option"], li, button, div')].filter(vis);
-    const hit = items.find(it=>{
-      const t = cs(it.innerText||it.textContent||'');
-      return t.includes(sizeStr) || t.includes(cs(sizePretty));
-    });
-
-    if(!hit){
-      document.dispatchEvent(new KeyboardEvent('keydown', {bubbles:true, key:'Escape'}));
-      document.dispatchEvent(new KeyboardEvent('keyup',   {bubbles:true, key:'Escape'}));
-      await sleep(80);
-      continue;
-    }
-
-    hit.scrollIntoView({block:'center'});
-    hit.click();
-    await sleep(120);
-
-    c.btn.scrollIntoView({block:'center'});
-    c.btn.click();
-    await sleep(500);
-    return true;
-  }
-
-  return false;
+  hit.scrollIntoView({block:'center'});
+  hit.click();
+  await sleep(450);
+  return true;
 }
 
-/* ===== helper: rebuild detailsList after adds ===== */
-async function rebuildDetailsAndEntries(rowsForId){
-  const detailsList=[];
-  let liveEntries=[];
-  for(const r of rowsForId){
-    if(stopping) break;
-    await ensureCampaignView();
-    const det = await expandRow(r);
-    await waitForIdle();
-    await ensureAllTilesMounted(det || d);
-    await sleep(80);
-    if(det) detailsList.push(det);
-    liveEntries = liveEntries.concat(sizesFromExpanded(det));
-  }
-  const uniq=new Map();
-  for(const e of liveEntries){
-    const k=`${e.size}|${e.variant||''}|${e.side||''}`;
-    if(!uniq.has(k)) uniq.set(k,{size:e.size,variant:e.variant,side:e.side})
-  }
-  return {detailsList, entries:[...uniq.values()]};
+async function tryAddTileOfSize(sizeStr){
+  // 1) find + click the Add Optional button
+  const btn = findAddOptionalPlaceholderButton(document);
+  if(!btn) return false;
+
+  btn.scrollIntoView({block:'center'});
+  btn.click();
+  await sleep(180);
+
+  // 2) pick size from the opened menu
+  const ok = await tryAddSizeFromMenu(sizeStr);
+  if(ok) return true;
+
+  // 3) sometimes menu renders elsewhere slightly later
+  await sleep(250);
+  return await tryAddSizeFromMenu(sizeStr);
 }
 
 async function runOnIds(ids){
@@ -1229,18 +1188,36 @@ async function runOnIds(ids){
 
     try{
       const rowsForId=findRowsByIdAll(id);
+      const detailsList=[];
+      let liveEntries=[];
 
-      // initial build
-      let {detailsList, entries} = await rebuildDetailsAndEntries(rowsForId);
+      for(const r of rowsForId){
+        if(stopping) break;
+
+        await ensureCampaignView();
+        const det = await expandRow(r);
+        await waitForIdle();
+        await ensureAllTilesMounted(det || d);
+        await sleep(80);
+
+        if (det) detailsList.push(det);
+        liveEntries = liveEntries.concat(sizesFromExpanded(det));
+      }
+
+      const uniq=new Map();
+      for(const e of liveEntries){
+        const k=`${e.size}|${e.variant||''}|${e.side||''}`;
+        if(!uniq.has(k)) uniq.set(k,{size:e.size,variant:e.variant,side:e.side})
+      }
+      const entries=[...uniq.values()];
 
       LOG(`→ ${id} størrelser:[${prettyCounts(entries)||'—'}]`);
       if(!entries.length){stats.skip++;stats.done++;setInfo(stats);continue}
 
       let wrote=false;
 
-      // --- Optional: add extra sizes if needed (only if addExtraSizes ON) ---
-      if(addExtraSizes && mapping.length){
-        // count current tiles per size|variant (ignoring side)
+      // --- Optional: add extra tiles if needed (only if addExtraSizes ON and reuse OFF) ---
+      if(addExtraSizes && !reuseAssets && mapping.length){
         const tileCountBySV = new Map();
         for(const det of detailsList){
           const tiles = getAllTiles(det);
@@ -1255,22 +1232,21 @@ async function runOnIds(ids){
           }
         }
 
-        // scriptsCount from mapping rows for this line (failsafe: only sizes that exist in CSV)
-        const scriptsBySV = new Map(); // size|variant -> count
+        const lineKeys = new Map(); // size|variant -> scriptsCount
         for(const m of (mapping||[])){
-          const idsArr=(m.lineIds||[]).map(String).filter(Boolean);
-          if(idsArr.length && !idsArr.includes(String(id))) continue;
+          const ids = (m.lineIds||[]).map(String);
+          if(ids.length && !ids.includes(String(id))) continue;
           if(!m.size || !m.tag) continue;
           const k = `${m.size}|${m.variant||''}`;
-          scriptsBySV.set(k, (scriptsBySV.get(k)||0)+1);
+          lineKeys.set(k, (lineKeys.get(k)||0)+1);
         }
 
-        const needList=[];
-        for(const [k, scriptsCount] of scriptsBySV.entries()){
+        const needList = [];
+        for(const [k, scriptsCount] of lineKeys.entries()){
           const tilesCount = tileCountBySV.get(k)||0;
           const need = Math.max(0, scriptsCount - tilesCount);
           if(need>0){
-            const [sz]=k.split('|');
+            const [sz] = k.split('|');
             needList.push({key:k, size:sz, need});
           }
         }
@@ -1286,7 +1262,7 @@ async function runOnIds(ids){
 
               const ok = await tryAddTileOfSize(x.size);
               if(!ok){
-                LOG(`   ! Klarte ikke å legge til ${x.size} (fant ikke UI/valget). Fortsetter uten å legge til mer for denne.`);
+                LOG(`   ! Klarte ikke å legge til ${x.size} (fant ikke knapp/meny eller størrelsen). Fortsetter.`);
                 break;
               }else{
                 LOG(`   + La til størrelse: ${x.size}`);
@@ -1297,8 +1273,23 @@ async function runOnIds(ids){
             }
           }
 
-          // IMPORTANT FIX: rebuild detailsList + entries AFTER adds
-          ({detailsList, entries} = await rebuildDetailsAndEntries(rowsForId));
+          // Re-scan after adds (best effort)
+          liveEntries = [];
+          for(const r of rowsForId){
+            if(stopping) break;
+            await ensureCampaignView();
+            const det = await expandRow(r);
+            await waitForIdle();
+            await ensureAllTilesMounted(det || d);
+            await sleep(80);
+            liveEntries = liveEntries.concat(sizesFromExpanded(det));
+          }
+          const uniq2=new Map();
+          for(const e of liveEntries){
+            const k2=`${e.size}|${e.variant||''}|${e.side||''}`;
+            if(!uniq2.has(k2)) uniq2.set(k2,{size:e.size,variant:e.variant,side:e.side})
+          }
+          entries.length=0; entries.push(...uniq2.values());
           LOG(`   · Etter legg-til: størrelser=[${prettyCounts(entries)||'—'}]`);
         }
       }
@@ -1477,12 +1468,4 @@ async function waitForIdle(timeout=12000){
   return true;
 }
 
-/* restore minimized state if previously minimized */
-(function restoreMinState(){
-  const st=loadUIState();
-  if(st?.min) setMinimized(true);
-})();
-
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
-
-
