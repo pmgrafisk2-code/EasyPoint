@@ -379,12 +379,8 @@ function isEmpty3PValue(v){ return !String(v||'').trim(); }
 #ap3p_bar .chip{padding:3px 8px;border-radius:999px;border:1px solid;font-size:12px;opacity:.95}
 #ap3p_bar .chip-ok{background:#064e3b;border-color:#10b981;color:#d1fae5}
 #ap3p_bar .chip-none{background:#1a1d27;border-color:#2a2d37;color:#e6e6e6}
-
-/* Flash/pulse */
 @keyframes ap3pPulse { 0%{transform:scale(1);filter:brightness(1)} 30%{transform:scale(1.02);filter:brightness(1.25)} 100%{transform:scale(1);filter:brightness(1)} }
 .ap3p-flash{animation: ap3pPulse 550ms ease-out 1;}
-
-/* Toast */
 #ap3p_toast{
   position:fixed; right:18px; bottom:18px; z-index:2147483648;
   background:#0b0c10; border:1px solid #2a2d37; color:#e6e6e6;
@@ -395,8 +391,6 @@ function isEmpty3PValue(v){ return !String(v||'').trim(); }
 #ap3p_toast.show{opacity:1; transform:translateY(0px);}
 #ap3p_toast .t{font-weight:700;margin-bottom:4px}
 #ap3p_toast .s{opacity:.85;white-space:pre-wrap}
-
-/* Resize handles */
 #ap3p_bar .aprs{position:absolute;z-index:2147483648;background:transparent}
 #ap3p_bar .aprs-n{top:-4px;left:10px;right:10px;height:8px;cursor:ns-resize}
 #ap3p_bar .aprs-s{bottom:-4px;left:10px;right:10px;height:8px;cursor:ns-resize}
@@ -671,7 +665,7 @@ reuseCb.onchange = () => {
   if (_lastPreview) { log.textContent=''; previewPlannedPlacements(_lastPreview); }
 };
 
-// Legg til ekstra størrelser (failsafe: kun hvis størrelsen finnes i CSV)
+// Legg til ekstra størrelser
 const ADD_KEY = 'ap3p_add_extra_sizes';
 let addExtraSizes = !!G(ADD_KEY, false);
 
@@ -707,8 +701,6 @@ owCb.onchange = () => {
 };
 
 function syncReuseWithAddExtra(){
-  // Når add-extra er AV: sunn default => gjenbruk PÅ (kan endres av bruker)
-  // Når add-extra er PÅ: legg-til gir bare mening om gjenbruk er AV, så vi tvinger AV + låser
   if(addExtraSizes){
     reuseAssets = false;
     reuseCb.checked = false;
@@ -718,7 +710,6 @@ function syncReuseWithAddExtra(){
   }else{
     reuseCb.disabled = false;
     reuseTxt.textContent = 'Gjenbruk';
-    // (behold reuseAssets som brukeren har valgt)
     reuseAssets = !!G(REUSE_KEY_NEW, true);
     reuseCb.checked = reuseAssets;
   }
@@ -731,7 +722,7 @@ addCb.onchange = () => {
   showToast('Legg til ekstra', addExtraSizes ? 'På (kan legge til størrelser)' : 'Av');
   if (_lastPreview) { log.textContent=''; previewPlannedPlacements(_lastPreview); }
 };
-syncReuseWithAddExtra(); // init
+syncReuseWithAddExtra();
 
 const reuseImages = () => reuseAssets;
 
@@ -908,20 +899,18 @@ function tagLabel(entry){
 }
 
 function countPlannedAdds(byId){
-  // Kun meningsfullt når addExtraSizes==true (og da er reuse låst AV)
   if(!addExtraSizes) return new Map();
   const pools = buildTagPools(mapping);
-  const planned = new Map(); // id -> [{size,variant,need}]
+  const planned = new Map();
 
   for(const [id, arr] of byId.entries()){
-    // count current tiles per size|variant|side
     const tileCounts = new Map();
     for(const e of arr){
       const key = `${e.size}|${e.variant||''}|${e.side||''}`;
       tileCounts.set(key, (tileCounts.get(key)||0) + 1);
     }
 
-    const uniqSizes = new Map(); // size|variant -> {size,variant}
+    const uniqSizes = new Map();
     for(const e of arr){
       const k = `${e.size}|${e.variant||''}`;
       if(!uniqSizes.has(k)) uniqSizes.set(k, {size:e.size,variant:e.variant||null});
@@ -929,7 +918,6 @@ function countPlannedAdds(byId){
 
     const adds=[];
     for(const sv of uniqSizes.values()){
-      // scripts for this line+size(+variant), fallback chain like run
       const exactLine = pools.getExact(id, sv.size, sv.variant||null);
       const sizeLine  = pools.getSize(id, sv.size);
       const exactAny  = pools.getExact(null, sv.size, sv.variant||null);
@@ -1113,156 +1101,89 @@ btnRun.onclick=()=>{
 };
 
 /* ========= (BEST EFFORT) add extra tiles ========= */
-/* ========= (BETTER) add extra tiles (dropdown + icon match) ========= */
+/**
+ * NY implementasjon for din dropdown:
+ * - Finn knappen som inneholder "Legg til valgfri materiell" (NO)
+ *   eller "Add optional creative placeholder" (EN)
+ * - Klikk, finn menyen (role=menu / dropdown---dropdown-menu---*)
+ * - Klikk riktig menuitem som matcher f.eks. 580x500
+ */
+function findAddOptionalButton(scope=d){
+  const buttons=[...scope.querySelectorAll('button')].filter(vis);
+  const rx = /(legg\s*til\s*valgfri\s*materiell|add\s*optional\s*creative\s*placeholder)/i;
+  // 1) tekst-match
+  let btn = buttons.find(b=>rx.test((b.innerText||b.textContent||'').trim()));
+  if(btn) return btn;
 
-// Språk-uavhengig: finn "Add optional creative placeholder" via ikon-path (samme på NO/EN)
-const ADD_PLACEHOLDER_ICON_D =
-  "M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2z";
+  // 2) fallback: plus-ikon path (samme som i HTML) + "Add size" i nærhet
+  const plusPathStart = 'M4 6H2v14'; // fra svg i knappen din
+  btn = buttons.find(b=>{
+    const p=b.querySelector('svg path');
+    const d0=p?.getAttribute?.('d')||'';
+    if(!d0.startsWith(plusPathStart)) return false;
+    const near = b.closest('div')?.innerText?.toLowerCase()||'';
+    return near.includes('add size') || near.includes('valgfri') || near.includes('optional');
+  });
+  return btn||null;
+}
 
-function isAddPlaceholderButton(btn){
+function findOpenMenu(){
+  // i HTML: <div role="menu" class="dropdown---dropdown-menu---...">
+  const menus=[...document.querySelectorAll('[role="menu"], .dropdown---dropdown-menu---1fkH0')].filter(vis);
+  // ta den som faktisk inneholder "Add size" eller størrelsesitems
+  const m = menus.find(x=>{
+    const t=(x.innerText||'').toLowerCase();
+    return t.includes('add size') || /\b\d{2,4}x\d{2,4}\b/i.test(t);
+  });
+  return m || menus[0] || null;
+}
+
+async function tryAddTileOfSize(sizeStr){
+  const want = cs(sizeStr); // 580x500
+  const before = document.querySelectorAll('.set-creativeTile').length;
+
+  // Knappen ligger typisk i expanded details-sone (samme container som tiles)
+  const scope = document.querySelector('.set-creativeSectionContainer')?.closest?.('div') || document;
+  const btn = findAddOptionalButton(scope) || findAddOptionalButton(document);
   if(!btn) return false;
-  const p = btn.querySelector?.('svg path');
-  return !!(p && p.getAttribute('d') === ADD_PLACEHOLDER_ICON_D);
-}
 
-function findAddDropdowns(scope){
-  const root = scope || document;
+  btn.scrollIntoView({block:'center'});
+  btn.click();
+  await sleep(150);
 
-  // Finn alle synlige knapper med riktig ikon
-  const addBtns = [...root.querySelectorAll('button')].filter(vis).filter(isAddPlaceholderButton);
-
-  // De sitter typisk inne i en dropdown-komponent: class*="dropdown---dropdown---"
-  const dropdowns = [];
-  for(const b of addBtns){
-    const dd =
-      b.closest?.('[class*="dropdown---dropdown---"]') ||
-      b.closest?.('[class*="dropdown"]') ||
-      null;
-
-    dropdowns.push(dd || b);
+  const menu = await waitFor(()=>findOpenMenu(), 2500, 60);
+  if(!menu){
+    // prøv en gang til (noen ganger krever det 2 klikk pga dropdown-toggle wrapper)
+    try{ btn.click(); }catch{}
+    await sleep(150);
   }
 
-  // Dedupe
-  return [...new Set(dropdowns.filter(Boolean))];
-}
+  const menu2 = await waitFor(()=>findOpenMenu(), 2500, 60);
+  if(!menu2) return false;
 
-function countTilesOfSizeInDetails(detailsList, sizeStr){
-  let c = 0;
-  for(const det of (detailsList || [])){
-    const tiles = getAllTiles(det);
-    for(const t of tiles){
-      if(tileHasSize(t, sizeStr)) c++;
-    }
-  }
-  return c;
-}
-
-async function openDropdown(dd){
-  // I snapshottene dine finnes ofte en outer toggle: button.dropdown---dropdown-toggle---*
-  const toggle =
-    dd?.querySelector?.('button[class*="dropdown---dropdown-toggle---"]') ||
-    dd?.querySelector?.('button');
-
-  if(!toggle) return false;
-
-  try { toggle.scrollIntoView({block:'center'}); } catch {}
-  toggle.click();
-  await sleep(120);
-  return true;
-}
-
-function findVisiblePortalMenu(){
-  // Noen ganger ligger menyen i samme dropdown, andre ganger i en "portal"
-  const candidates = [
-    ...document.querySelectorAll('[class*="dropdown---dropdown-menu---"]'),
-    ...document.querySelectorAll('[role="menu"]'),
-    ...document.querySelectorAll('[role="listbox"]'),
-    ...document.querySelectorAll('.MuiMenu-list'),
-  ];
-  return candidates.find(vis) || null;
-}
-
-async function pickSizeFromMenu(menu, sizeStr){
-  const wanted = cs(sizeStr);
-  const pretty = cs(sizeStr.replace('x','×'));
-
-  const nodes = [...menu.querySelectorAll('[role="menuitem"], [role="option"], li, button, div')]
-    .filter(vis)
-    .filter(n => /\d{2,4}\s*[x×]\s*\d{2,4}/i.test(n.textContent || ''));
-
-  const hit = nodes.find(n => {
-    const t = cs(n.textContent || '');
-    return t === wanted || t.includes(wanted) || t === pretty || t.includes(pretty);
+  const items=[...menu2.querySelectorAll('[role="menuitem"], .dropdown---menu-item---1LjoL')].filter(vis);
+  const hit = items.find(it=>{
+    const t=cs(it.innerText||it.textContent||'');
+    // matcher "580x500" eller "580×500" normalisert via cs()
+    return t===want || t.includes(want);
   });
 
-  if(!hit) return false;
-
-  try { hit.scrollIntoView({block:'center'}); } catch {}
-  hit.click();
-  await sleep(180);
-  return true;
-}
-
-async function tryAddTileOfSize(sizeStr, detailsList){
-  const before = countTilesOfSizeInDetails(detailsList || [], sizeStr);
-
-  // Prøv først inne i expanded details (mye mer presist enn document)
-  const scopes = (detailsList && detailsList.length) ? detailsList : [document];
-
-  for(const scope of scopes){
-    const dropdowns = findAddDropdowns(scope);
-
-    for(const dd of dropdowns){
-      if(!dd || !vis(dd)) continue;
-
-      // 1) Åpne dropdown
-      const opened = await openDropdown(dd);
-      if(!opened) continue;
-
-      // 2) Finn meny (inne i dd eller som portal)
-      const menu = await waitFor(() => {
-        const inside = dd.querySelector?.('[class*="dropdown---dropdown-menu---"]');
-        if(inside && vis(inside)) return inside;
-
-        // Noen ganger finnes den, men blir ikke "synlig" på offsetParent; prøv portal
-        const portal = findVisiblePortalMenu();
-        return portal || null;
-      }, 1800, 60);
-
-      if(!menu){
-        // Lukk evt. popover og prøv neste
-        document.dispatchEvent(new KeyboardEvent('keydown', {bubbles:true, key:'Escape'}));
-        document.dispatchEvent(new KeyboardEvent('keyup',   {bubbles:true, key:'Escape'}));
-        await sleep(80);
-        continue;
-      }
-
-      // 3) Klikk størrelsen (dette er ofte selve "add"-handlingen)
-      const picked = await pickSizeFromMenu(menu, sizeStr);
-      if(!picked){
-        document.dispatchEvent(new KeyboardEvent('keydown', {bubbles:true, key:'Escape'}));
-        document.dispatchEvent(new KeyboardEvent('keyup',   {bubbles:true, key:'Escape'}));
-        await sleep(80);
-        continue;
-      }
-
-      // 4) Vent på at en ny tile faktisk dukker opp
-      const ok = await waitFor(() => {
-        const after = countTilesOfSizeInDetails(detailsList || [], sizeStr);
-        return after > before ? true : null;
-      }, 4500, 120);
-
-      if(ok){
-        // Sørg for at virtualiserte tiles blir mountet før vi fortsetter
-        await ensureAllTilesMounted(scope || document);
-        return true;
-      }
-    }
+  if(!hit){
+    // lukk meny
+    document.dispatchEvent(new KeyboardEvent('keydown', {bubbles:true, key:'Escape'}));
+    document.dispatchEvent(new KeyboardEvent('keyup',   {bubbles:true, key:'Escape'}));
+    await sleep(80);
+    return false;
   }
 
-  return false;
-}
+  hit.scrollIntoView({block:'center'});
+  hit.click();
 
+  // Vent på at ny tile faktisk dukker opp
+  await waitFor(()=>document.querySelectorAll('.set-creativeTile').length>before, 5000, 120);
+  await sleep(200);
+  return document.querySelectorAll('.set-creativeTile').length>before;
+}
 
 /* ===== helper: rebuild detailsList after adds ===== */
 async function rebuildDetailsAndEntries(rowsForId){
@@ -1308,9 +1229,8 @@ async function runOnIds(ids){
 
       let wrote=false;
 
-      // --- Optional: add extra sizes if needed (only if addExtraSizes ON) ---
+      // --- Optional: add extra sizes if needed ---
       if(addExtraSizes && mapping.length){
-        // count current tiles per size|variant (ignoring side)
         const tileCountBySV = new Map();
         for(const det of detailsList){
           const tiles = getAllTiles(det);
@@ -1325,8 +1245,7 @@ async function runOnIds(ids){
           }
         }
 
-        // scriptsCount from mapping rows for this line (failsafe: only sizes that exist in CSV)
-        const scriptsBySV = new Map(); // size|variant -> count
+        const scriptsBySV = new Map();
         for(const m of (mapping||[])){
           const idsArr=(m.lineIds||[]).map(String).filter(Boolean);
           if(idsArr.length && !idsArr.includes(String(id))) continue;
@@ -1354,8 +1273,7 @@ async function runOnIds(ids){
               await ensureCampaignView();
               await waitForIdle();
 
-              const ok = await tryAddTileOfSize(x.size, detailsList);
-
+              const ok = await tryAddTileOfSize(x.size);
               if(!ok){
                 LOG(`   ! Klarte ikke å legge til ${x.size} (fant ikke UI/valget). Fortsetter uten å legge til mer for denne.`);
                 break;
@@ -1363,12 +1281,11 @@ async function runOnIds(ids){
                 LOG(`   + La til størrelse: ${x.size}`);
               }
 
-              await sleep(550);
+              await sleep(450);
               await ensureAllTilesMounted(d);
             }
           }
 
-          // IMPORTANT FIX: rebuild detailsList + entries AFTER adds
           ({detailsList, entries} = await rebuildDetailsAndEntries(rowsForId));
           LOG(`   · Etter legg-til: størrelser=[${prettyCounts(entries)||'—'}]`);
         }
@@ -1396,7 +1313,6 @@ async function runOnIds(ids){
           continue;
         }
 
-        // Images first
         const imgs = imageChoicesForEntry(entry);
         if (imgs.length) {
           let placed = 0;
@@ -1416,7 +1332,6 @@ async function runOnIds(ids){
           continue;
         }
 
-        // Scripts
         const exactLine = pools.getExact(id, entry.size, entry.variant || null);
         const sizeLine  = pools.getSize(id, entry.size);
         const exactAny  = pools.getExact(null, entry.size, entry.variant || null);
@@ -1456,7 +1371,6 @@ async function runOnIds(ids){
           const editor = await open3PTab();
           if (!editor) { LOG('   ! Fant ikke 3rd-party editor'); stats.err++; continue; }
 
-          // Overwrite policy
           if (overwriteMode === 'empty') {
             const current = getEditorValue(editor);
             if (!isEmpty3PValue(current)) { skipped++; continue; }
@@ -1555,4 +1469,3 @@ async function waitForIdle(timeout=12000){
 })();
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
-
