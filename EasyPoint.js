@@ -1275,6 +1275,57 @@ async function rebuildDetailsAndEntries(rowsForId){
   return {detailsList, entries:[...uniq.values()]};
 }
 
+async function addOptionalMaterialSizeForLine(lineRootEl, sizeStr){
+  const norm = s => String(s||"").replace(/\s+/g,"").toLowerCase();
+
+  // Finn dropdown-toggle for "Legg til valgfri materiell" innenfor riktig linje
+  const toggles = Array.from(lineRootEl.querySelectorAll('button'))
+    .filter(b => /legg til valgfri materiell/i.test(b.innerText || b.textContent || ""));
+
+  const toggleBtn = toggles[0] || null;
+  if (!toggleBtn) return { ok:false, why:"Fant ikke 'Legg til valgfri materiell' i linja" };
+
+  // Åpne dropdown (ofte bedre med mousedown/pointerdown på custom dropdowns)
+  const open = () => {
+    toggleBtn.scrollIntoView({ block:"center", inline:"center" });
+    toggleBtn.dispatchEvent(new MouseEvent("mousedown", { bubbles:true, cancelable:true, view:window }));
+    toggleBtn.dispatchEvent(new MouseEvent("mouseup",   { bubbles:true, cancelable:true, view:window }));
+    toggleBtn.dispatchEvent(new MouseEvent("click",     { bubbles:true, cancelable:true, view:window }));
+  };
+
+  open();
+
+  // Vent på meny (role="menu" med header "Add size:" eller menuitems)
+  const menu = await waitFor(() => {
+    // Menyen kan ligge inni samme wrapper ELLER være portalled til body
+    const candidateMenus = Array.from(document.querySelectorAll('[role="menu"]'));
+    // velg den som inneholder "Add size:" eller 580x500
+    return candidateMenus.find(m => /add size/i.test(m.innerText || "") || /580x500/.test(m.innerText || ""));
+  }, 2000, 50);
+
+  if (!menu) return { ok:false, why:"Dropdown-meny dukket ikke opp" };
+
+  // Finn ønsket menuitem
+  const wanted = Array.from(menu.querySelectorAll('[role="menuitem"]'))
+    .find(mi => norm(mi.innerText || mi.textContent || "") === norm(sizeStr));
+
+  if (!wanted) {
+    // Noen ganger er teksten i child div
+    const wanted2 = Array.from(menu.querySelectorAll('[role="menuitem"] *'))
+      .find(n => norm(n.innerText || n.textContent || "") === norm(sizeStr));
+    if (!wanted2) return { ok:false, why:`Fant ikke størrelse-valg i menyen: ${sizeStr}` };
+    wanted2.closest('[role="menuitem"]')?.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,view:window}));
+  } else {
+    wanted.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,view:window}));
+  }
+
+  // Vent litt på at UI faktisk legger til tile (kan trigge nettverkskall)
+  await sleep(350);
+
+  return { ok:true };
+}
+
+
 async function runOnIds(ids){
   stopping=false;
   btnRun.disabled=true; btnStop.disabled=false; btnScan.disabled=true;
@@ -1343,16 +1394,35 @@ async function runOnIds(ids){
 LOG(`   · prøver å legge til ${x.size} (scope for linje ${id})`);
 
 let ok = false;
+let why = '';
+
 for (const det of (detailsList || [])) {
-  ok = await tryAddTileOfSize(x.size, det);
+  const res = await addOptionalMaterialSizeForLine(det, x.size);
+  ok = !!res?.ok;
+  why = res?.why || '';
   if (ok) break;
 }
-if (!ok) ok = await tryAddTileOfSize(x.size, document);
+
+// fallback (hvis UI er portalled/ligger utenfor det)
+if (!ok) {
+  const res2 = await addOptionalMaterialSizeForLine(document, x.size);
+  ok = !!res2?.ok;
+  why = res2?.why || why;
+}
 
 if (!ok) {
-  LOG(`   ! Klarte ikke å legge til ${x.size} (fant ikke UI/valget). Fortsetter uten å legge til mer for denne.`);
+  LOG(`   ! Klarte ikke å legge til ${x.size}: ${why || 'ukjent'}`);
   break;
 }
+
+LOG(`   + La til størrelse: ${x.size}`);
+await sleep(450);
+
+// mount tiles i alle detaljer (etter at ny tile er lagt til)
+for (const det of (detailsList || [])) {
+  await ensureAllTilesMounted(det || d);
+}
+
 
 LOG(`   + La til størrelse: ${x.size}`);
 await sleep(450);
