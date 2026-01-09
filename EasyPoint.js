@@ -794,7 +794,7 @@ const addCb = document.createElement('input');
 addCb.type='checkbox';
 addCb.checked = addExtraSizes;
 const addTxt = document.createElement('span');
-addTxt.textContent = 'Tillat å legge til størrelser';
+addTxt.textContent = 'Tillat å legge til størrelser (hvis flere scripts enn plasser)';
 addWrap.append(addCb, addTxt);
 body.insertBefore(addWrap, drop);
 
@@ -1166,13 +1166,18 @@ btnScan.onclick=async()=>{
     await waitForIdle();
 
     const id  = rowId(r);
-    const det = await expandRow(r);
+    const det = await ensureLineExpanded(r);
+if (!det) {
+  LOG(`! Klarte ikke å åpne linje ${id} (fant ikke collapse/creative section). Hopper over.`);
+  continue;
+}
 
-    await waitForIdle();
-    await ensureAllTilesMounted(det || d);
-    await sleep(80);
+await waitForIdle();
+await ensureAllTilesMounted(det);
+await sleep(80);
 
-    let entries = sizesFromExpanded(det);
+let entries = sizesFromExpanded(det);
+
     const prev = byId.get(id) || [];
     byId.set(id, prev.concat(entries));
 
