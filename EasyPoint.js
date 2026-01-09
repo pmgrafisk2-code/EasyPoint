@@ -1739,19 +1739,18 @@ for (const det of detailsList) {
 
 
           const editor = await open3PTab();
+          await sleep(120);
+
           if (!editor) { LOG('   ! Fant ikke 3rd-party editor'); stats.err++; continue; }
 
          if (overwriteMode === 'empty') {
-  let current = getEditorValue(editor);
+  // Vent til editoren har “stabilisert” seg (kan være treg til å fylle inn eksisterende innhold)
+  const current = await getEditorValueStable(editor, 10, 140);
 
-  // hvis vi nettopp har byttet tile, men editor er treg: gi den et lite "retry"
-  if (!isEmpty3PValue(current)) {
-    await sleep(180);
-    current = getEditorValue(editor);
-  }
-
+  // Hvis det faktisk finnes innhold -> hopp over (ikke erstatt)
   if (!isEmpty3PValue(current)) { skipped++; continue; }
 }
+
 
 
 
