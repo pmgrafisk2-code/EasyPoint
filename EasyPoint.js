@@ -1161,83 +1161,101 @@ btnRun.onclick=()=>{
 // finner riktig "portal"-meny som dukker opp etter klikk,
 // klikker ønsket størrelse INNI den menyen, og verifiserer at linja fikk +1 tile.
 
+// ---------- Expand helper (per linje) ----------
+function getExpandBtnForDataRow(dataRow){
+  if(!dataRow) return null;
+  const btns = Array.from(dataRow.querySelectorAll('button')).filter(vis);
+  // Finn chevron-ned (expand) via svg-path som i HTMLen din
+  for (const b of btns){
+    const p = b.querySelector('svg path');
+    const d = p?.getAttribute?.('d') || '';
+    if (d.startsWith('M7.41 8.59L12 13.17')) return b; // expand/collapse chevron
+  }
+  return null;
+}
+
+async function ensureLineExpanded(dataRow){
+  // Hvis collapse-raden allerede finnes og har creative section, er vi good
+  let collapseRow = getCollapseRowForDataRow(dataRow);
+  if (collapseRow && collapseRow.querySelector('.set-matSpecCreativeSection')) return collapseRow;
+
+  // Prøv å klikke expand
+  const expBtn = getExpandBtnForDataRow(dataRow);
+  if (expBtn){
+    expBtn.scrollIntoView({ block:'center' });
+    expBtn.click();
+  }
+
+  // Vent på at collapse-raden kommer
+  collapseRow = await waitFor(() => {
+    const cr = getCollapseRowForDataRow(dataRow);
+    if (cr && cr.querySelector('.set-matSpecCreativeSection')) return cr;
+    return null;
+  }, 3000, 80);
+
+  return collapseRow;
+}
+
+// ---------- Meny visibility (robust) ----------
 function isVisibleMenu(el){
   if(!el) return false;
-  const cs = getComputedStyle(el);
-  if (cs.display === "none" || cs.visibility === "hidden") return false;
+  const st = getComputedStyle(el);
+  if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
   const r = el.getBoundingClientRect();
   return r.width > 0 && r.height > 0;
 }
 
-function countTilesInCollapse(collapseRow){
-  return collapseRow
-    ? collapseRow.querySelectorAll(".set-creativeTile, .set-creativeTile__selected").length
-    : 0;
-}
-
-function getAddOptionalBtn(collapseRow){
-  if(!collapseRow) return null;
-  const btns = Array.from(collapseRow.querySelectorAll("button")).filter(vis);
-  return btns.find(b => (b.textContent || "").includes("Legg til valgfri materiell")) || null;
-}
-
+// ---------- Add size (LINJE-SCOPED) - patched ----------
 async function addSizeScopedToLine(dataRow, sizeText){
-  // 1) Sørg for at linja er åpen og vi har riktig collapseRow
-  const collapseRow = await expandRow(dataRow);
-  if (!collapseRow || !collapseRow.querySelector?.(".set-matSpecCreativeSection")) {
-    return { ok:false, reason:"Linja ble ikke åpnet / fant ikke creative-seksjon" };
-  }
-
-  await ensureAllTilesMounted(collapseRow);
-  await sleep(120);
+  // 1) sørg for at linja er åpen
+  const collapseRow = await ensureLineExpanded(dataRow);
+  if (!collapseRow) return { ok:false, reason:"Fant ikke collapse-rad / klarte ikke ekspandere linja" };
 
   const btn = getAddOptionalBtn(collapseRow);
-  if (!btn) return { ok:false, reason:"Fant ikke 'Legg til valgfri materiell' i den åpne linja" };
+  if (!btn) return { ok:false, reason:"Fant ikke 'Legg til valgfri materiell'-knapp i linja" };
 
   const tilesBefore = countTilesInCollapse(collapseRow);
 
-  // 2) Snapshot av synlige menyer før klikk
-  const visibleMenusBefore = Array.from(document.querySelectorAll('[role="menu"]')).filter(isVisibleMenu);
-
+  // 2) åpne meny
   btn.scrollIntoView({ block:'center' });
   btn.click();
 
-  // 3) Finn menyen robust:
-  // - ny synlig meny som dukket opp
-  // - eller en synlig meny som inneholder ønsket sizeText
+  // 3) finn MENYEN (først lokalt i collapseRow, så fallback globalt)
   const menu = await waitFor(() => {
-    const menusNow = Array.from(document.querySelectorAll('[role="menu"]')).filter(isVisibleMenu);
+    // lokalt
+    const local = Array.from(
+      collapseRow.querySelectorAll('div[role="menu"].dropdown---dropdown-menu---1fkH0, div[role="menu"]')
+    ).filter(isVisibleMenu);
+    if (local.length) return local[local.length - 1];
 
-    // prøv: ny meny
-    const newOnes = menusNow.filter(m => !visibleMenusBefore.includes(m));
-    const candidates = newOnes.length ? newOnes : menusNow;
-
-    // velg den som faktisk inneholder sizeText (best signal)
-    const want = String(sizeText).trim();
-    const hit = candidates.find(m => (m.innerText || "").split("\n").some(line => line.trim() === want));
-    if (hit) return hit;
-
-    // fallback: siste synlige meny
-    return candidates.length ? candidates[candidates.length - 1] : null;
-  }, 3000, 80);
+    // fallback globalt (noen ganger portales den likevel)
+    const global = Array.from(
+      document.querySelectorAll('div[role="menu"].dropdown---dropdown-menu---1fkH0, div[role="menu"]')
+    ).filter(isVisibleMenu);
+    return global.length ? global[global.length - 1] : null;
+  }, 2500, 60);
 
   if (!menu) return { ok:false, reason:"Meny dukket ikke opp" };
 
-  // 4) Klikk riktig item
-  const want = String(sizeText).trim();
-  const wanted = Array.from(menu.querySelectorAll('[role="menuitem"], [role="option"], button, div'))
-    .find(el => (el.textContent || "").trim() === want);
+  // 4) finn ønsket item – match på synlig tekst (innerText) siden teksten ligger inni en div
+  const wanted = Array.from(menu.querySelectorAll('[role="menuitem"], .dropdown---menu-item---1LjoL'))
+    .find(el => (el.innerText || el.textContent || '').trim() === String(sizeText).trim());
 
   if (!wanted) {
-    document.body.click();
-    return { ok:false, reason:`Fant ikke størrelse '${sizeText}' i menyen` };
+    // lukk meny hvis mulig
+    try { document.body.click(); } catch {}
+    // litt mer debug-info kan være nyttig:
+    const allItems = Array.from(menu.querySelectorAll('[role="menuitem"], .dropdown---menu-item---1LjoL'))
+      .map(el => (el.innerText || el.textContent || '').trim())
+      .filter(Boolean);
+    return { ok:false, reason:`Fant ikke størrelse '${sizeText}' i menyen. Fantes: ${allItems.join(', ')}` };
   }
 
   wanted.scrollIntoView({ block:'center' });
   wanted.click();
 
-  // 5) Verifiser at DENNE linja fikk ny tile
-  const ok = await waitFor(() => countTilesInCollapse(collapseRow) >= tilesBefore + 1, 4000, 100);
+  // 5) verifiser at DENNE linja fikk en ny tile
+  const ok = await waitFor(() => countTilesInCollapse(collapseRow) === tilesBefore + 1, 3500, 80);
   if (!ok) return { ok:false, reason:"Klikk utført, men ingen ny tile dukket opp i denne linja" };
 
   return { ok:true };
