@@ -760,7 +760,7 @@ const addCb = document.createElement('input');
 addCb.type='checkbox';
 addCb.checked = addExtraSizes;
 const addTxt = document.createElement('span');
-addTxt.textContent = 'Tillat å legge til størrelser (hvis flere scripts enn plasser)';
+addTxt.textContent = 'Tillat å legge til størrelser';
 addWrap.append(addCb, addTxt);
 body.insertBefore(addWrap, drop);
 
@@ -1781,3 +1781,4 @@ async function waitForIdle(timeout=12000){
 })();
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
+
