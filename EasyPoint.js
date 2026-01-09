@@ -176,24 +176,40 @@ function pickTilesForEntry(details,entry){
 }
 
 /* ========= virtualized list: mount all tiles ========= */
-async function ensureAllTilesMounted(root=d){
-  const scroller=
-    root.querySelector('.set-creativeSectionContainer')||
-    root.querySelector('.set-creativeContainer')||
-    root.querySelector('[class*="creativeSectionContainer"]')||
-    root.querySelector('[class*="creativeContainer"]')||
+async function ensureAllTilesMounted(root = d) {
+  const scroller =
+    root.querySelector('.set-creativeSectionContainer') ||
+    root.querySelector('.set-creativeContainer') ||
+    root.querySelector('[class*="creativeSectionContainer"]') ||
+    root.querySelector('[class*="creativeContainer"]') ||
     d.scrollingElement;
 
-  if(!scroller) return;
-  let prev=-1, still=0;
-  for(let i=0;i<32 && still<3;i++){
-    scroller.scrollBy(0,1e6);
-    await sleep(300);
-    const count=d.querySelectorAll('.set-creativeTile').length;
-    if(count===prev) still++; else { prev=count; still=0; }
+  if (!scroller) return;
+
+  const countTiles = () =>
+    (root || d).querySelectorAll('.set-creativeTile, .set-creativeTile__selected').length;
+
+  let prev = -1, still = 0;
+  let delay = 80; // start raskt
+
+  for (let i = 0; i < 32 && still < 3; i++) {
+    scroller.scrollBy(0, 1e6);
+    await sleep(delay);
+
+    const count = countTiles();
+    if (count === prev) {
+      still++;
+      delay = Math.min(420, delay + 60); // backoff hvis ingenting skjer
+    } else {
+      prev = count;
+      still = 0;
+      delay = 80; // reset når vi ser progresjon
+    }
   }
-  scroller.scrollTo(0,0);
+
+  scroller.scrollTo(0, 0);
 }
+
 
 /* ========= info panel switching ========= */
 function panelHasSize(size){
@@ -1761,5 +1777,6 @@ w.addEventListener('keydown',e=>{ if(e.altKey && e.key.toLowerCase()==='a'){ e.p
 })();
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
+
 
 
