@@ -1294,8 +1294,14 @@ function pickNearestTo(btn, nodes){
 }
 
 function normTxt(s){
-  return String(s||'').replace(/\s+/g,' ').trim().toLowerCase();
+  return String(s||'')
+    .replace(/\u00A0/g,' ')          // nbsp -> space
+    .replace(/\s+/g,' ')
+    .trim()
+    .toLowerCase()
+    .replace(/\s*[x×]\s*/g,'x');     // "580 × 500" / "580×500" -> "580x500"
 }
+
 
 function doPointerClick(el){
   if(!el) return;
@@ -1519,13 +1525,13 @@ async function runOnIds(ids){
 
         const needList=[];
         for(const [k, scriptsCount] of scriptsBySV.entries()){
-          const [sz, vr] = k.split('|');
+// ... inni for(const [k, scriptsCount] of scriptsBySV.entries()) {
+const [sz, vr] = k.split('|');
 const tilesCount = countTilesForSizeVariant(detailsList, sz, vr || null);
 
-          // Samme regel som i run: legg kun til hvis størrelsen mangler helt.
-// (AdPoint blokkerer ofte duplikat-størrelser per linje.)
+// Legg kun til hvis størrelsen mangler helt:
 if (tilesCount === 0 && scriptsCount > 0) {
-  adds.push({ size: sv.size, variant: sv.variant || null, need: 1 });
+  needList.push({ size: sz, variant: (vr || null), need: 1 });
 }
 
         }
