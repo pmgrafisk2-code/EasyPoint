@@ -452,6 +452,35 @@ async function checkpoint(label=''){
 }
 function isEmpty3PValue(v){ return !String(v||'').trim(); }
 
+function normalizeEditorText(s){
+  return String(s || '')
+    .replace(/\u200B/g, '')   // zero-width space
+    .replace(/\u00A0/g, ' ')  // nbsp
+    .replace(/\r\n/g, '\n')
+    .trim();
+}
+
+function isEmpty3PValue(v){
+  return !normalizeEditorText(v).length;
+}
+
+// Sjekk om tile allerede har materiell (preview/thumbnail)
+function tileHasMaterial(tile){
+  if(!tile) return false;
+
+  // Vanlig preview: background-image: url("...")
+  const media = tile.querySelector('.MuiCardMedia-root, [class*="CardMedia"]');
+  const bg = media && getComputedStyle(media).backgroundImage;
+  if (bg && bg !== 'none' && /url\(/i.test(bg)) return true;
+
+  // Fallback: img-tag i tile
+  const img = tile.querySelector('img');
+  if (img && (img.currentSrc || img.src)) return true;
+
+  return false;
+}
+
+
 /* ========= UI ========= */
 (function injectCSS(){
   const st=d.createElement('style');
@@ -804,7 +833,7 @@ const addCb = document.createElement('input');
 addCb.type='checkbox';
 addCb.checked = addExtraSizes;
 const addTxt = document.createElement('span');
-addTxt.textContent = 'Tillat å legge til størrelser (hvis flere scripts enn plasser)';
+addTxt.textContent = 'Automatisk legg til ekstra størrelser';
 addWrap.append(addCb, addTxt);
 body.insertBefore(addWrap, drop);
 
@@ -1776,21 +1805,25 @@ for (const det of detailsList) {
           if (!editor) { LOG('   ! Fant ikke 3rd-party editor'); stats.err++; continue; }
 
          if (overwriteMode === 'empty') {
-  // Ventif (overwriteMode === 'empty') {
-  // Vent til editor-innholdet har “landet” (enten stabilt tomt eller stabilt med tekst)
+  // 1) Hvis tile allerede har materiell -> IKKE rør den
+  if (tileHasMaterial(tiles[i])) { skipped++; continue; }
+
+  // 2) Sjekk faktisk tekst i 3rd party tag (robust)
   const current = await getEditorValueStable(editor, 12, 150);
 
-  // Extra safety: hvis CodeMirror noen ganger ikke har oppdatert før vi fokuserer:
+  // noen ganger må man trigge focus før CM “fyller inn”
   if (isEmpty3PValue(current)) {
+    try { (editor.el || editor).focus?.(); } catch {}
     try { (editor.el || editor).click?.(); } catch {}
     await sleep(120);
   }
 
   const current2 = await getEditorValueStable(editor, 6, 150);
 
-  // Hvis det finnes tekst -> hopp over (erstatt er AV)
+  // hvis det finnes tekst -> hopp over
   if (!isEmpty3PValue(current2)) { skipped++; continue; }
 }
+
 
 
 
