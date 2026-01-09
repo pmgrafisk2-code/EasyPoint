@@ -287,21 +287,31 @@ function rowId(row){
 function findRowsByIdAll(targetId){return findRows().filter(r=>rowId(r)===targetId)}
 async function expandRow(row){
   if(!row) return null;
+
+  // Hvis den allerede er åpen: returner riktig sibling direkte
+  const sib0 = row.nextElementSibling;
+  if (sib0 && sib0.querySelector('.set-creativeSectionContainer, .set-creativeContainer')) {
+    return sib0;
+  }
+
   row.scrollIntoView({block:'center'});
+
+  // Klikk EN gang (ikke toggle to ganger)
   row.dispatchEvent(new MouseEvent('pointerdown',{bubbles:true}));
   row.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));
   row.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));
   row.click();
-  await sleep(120);
-  row.click();
-  await sleep(160);
-  for(let i=0;i<14;i++){
-    const sib=row.nextElementSibling;
-    if(sib&&(sib.querySelector('.set-creativeSectionContainer, .set-creativeContainer'))) return sib;
-    await sleep(90)
-  }
-  return row.nextElementSibling||null
+
+  // Vent på collapse-row med creatives
+  const det = await waitFor(() => {
+    const sib = row.nextElementSibling;
+    if (sib && sib.querySelector('.set-creativeSectionContainer, .set-creativeContainer')) return sib;
+    return null;
+  }, 4000, 80);
+
+  return det || row.nextElementSibling || null;
 }
+
 
 /* ========= detect placeholders ========= */
 function sizesFromExpanded(details){
@@ -794,7 +804,7 @@ const addCb = document.createElement('input');
 addCb.type='checkbox';
 addCb.checked = addExtraSizes;
 const addTxt = document.createElement('span');
-addTxt.textContent = 'Tillat å legge til størrelser';
+addTxt.textContent = 'Tillat å legge til størrelser (hvis flere scripts enn plasser)';
 addWrap.append(addCb, addTxt);
 body.insertBefore(addWrap, drop);
 
@@ -1167,6 +1177,7 @@ btnScan.onclick=async()=>{
 
     const id  = rowId(r);
     const det = await ensureLineExpanded(r);
+    
 if (!det) {
   LOG(`! Klarte ikke å åpne linje ${id} (fant ikke collapse/creative section). Hopper over.`);
   continue;
@@ -1578,6 +1589,14 @@ async function runOnIds(ids){
     try{
       const rowsForId=findRowsByIdAll(id);
 
+      // Sørg for at linjene faktisk er åpne før vi teller / jobber
+for (const dr of rowsForId) {
+  if (stopping) break;
+  await ensureLineExpanded(dr);
+  await waitForIdle();
+}
+
+
       // initial build
       let {detailsList, entries} = await rebuildDetailsAndEntries(rowsForId);
 
@@ -1757,12 +1776,22 @@ for (const det of detailsList) {
           if (!editor) { LOG('   ! Fant ikke 3rd-party editor'); stats.err++; continue; }
 
          if (overwriteMode === 'empty') {
-  // Vent til editoren har “stabilisert” seg (kan være treg til å fylle inn eksisterende innhold)
-  const current = await getEditorValueStable(editor, 10, 140);
+  // Ventif (overwriteMode === 'empty') {
+  // Vent til editor-innholdet har “landet” (enten stabilt tomt eller stabilt med tekst)
+  const current = await getEditorValueStable(editor, 12, 150);
 
-  // Hvis det faktisk finnes innhold -> hopp over (ikke erstatt)
-  if (!isEmpty3PValue(current)) { skipped++; continue; }
+  // Extra safety: hvis CodeMirror noen ganger ikke har oppdatert før vi fokuserer:
+  if (isEmpty3PValue(current)) {
+    try { (editor.el || editor).click?.(); } catch {}
+    await sleep(120);
+  }
+
+  const current2 = await getEditorValueStable(editor, 6, 150);
+
+  // Hvis det finnes tekst -> hopp over (erstatt er AV)
+  if (!isEmpty3PValue(current2)) { skipped++; continue; }
 }
+
 
 
 
