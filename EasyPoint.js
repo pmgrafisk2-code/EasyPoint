@@ -738,7 +738,7 @@ reuseCb.onchange = () => {
 // Legg til ekstra størrelser
 const ADD_KEY = 'ap3p_add_extra_sizes';
 let addExtraSizes = !!G(ADD_KEY, false);
-/*
+
 const addWrap = document.createElement('label');
 addWrap.style.cssText='display:flex;align-items:center;gap:6px;margin-left:8px;font-size:12px;opacity:.95';
 const addCb = document.createElement('input');
@@ -747,7 +747,7 @@ addCb.checked = addExtraSizes;
 const addTxt = document.createElement('span');
 addTxt.textContent = 'Tillat å legge til størrelser (hvis flere scripts enn plasser)';
 addWrap.append(addCb, addTxt);
-body.insertBefore(addWrap, drop); */
+body.insertBefore(addWrap, drop);
 
 // Erstatt-modus: alle vs kun tomme
 const OVERWRITE_KEY = 'ap3p_overwrite_mode'; // 'all' | 'empty'
