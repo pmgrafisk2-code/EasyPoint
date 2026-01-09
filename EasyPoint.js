@@ -1112,9 +1112,9 @@ let _lastPreview=null;
 
 function updateReuseLabel(){
   if(addExtraSizes){
-    reuseTxt.textContent='Gjenbruk (av når "legg til ekstra" er på)';
+    reuseTxt.textContent='Gjenbruk';
   }else{
-    reuseTxt.textContent='Gjenbruk samme scripts for å fylle alt';
+    reuseTxt.textContent='Gjenbruk';
   }
 }
 function syncReuseWithAddExtra(){
@@ -1761,4 +1761,5 @@ w.addEventListener('keydown',e=>{ if(e.altKey && e.key.toLowerCase()==='a'){ e.p
 })();
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
+
 
