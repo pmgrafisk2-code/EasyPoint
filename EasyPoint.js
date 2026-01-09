@@ -1169,16 +1169,6 @@ function isVisibleMenu(el){
   return r.width > 0 && r.height > 0;
 }
 
-function getCollapseRowForDataRow(dataRow){
-  let n = dataRow?.nextElementSibling;
-  while (n){
-    if (n.querySelector?.(".set-matSpecCreativeSection")) return n;
-    if (n.classList?.contains("set-matSpecDataRow")) break;
-    n = n.nextElementSibling;
-  }
-  return null;
-}
-
 function countTilesInCollapse(collapseRow){
   return collapseRow
     ? collapseRow.querySelectorAll(".set-creativeTile, .set-creativeTile__selected").length
@@ -1192,34 +1182,51 @@ function getAddOptionalBtn(collapseRow){
 }
 
 async function addSizeScopedToLine(dataRow, sizeText){
-  const collapseRow = getCollapseRowForDataRow(dataRow);
-  if (!collapseRow) return { ok:false, reason:"Fant ikke collapse-rad for linja" };
+  // 1) Sørg for at linja er åpen og vi har riktig collapseRow
+  const collapseRow = await expandRow(dataRow);
+  if (!collapseRow || !collapseRow.querySelector?.(".set-matSpecCreativeSection")) {
+    return { ok:false, reason:"Linja ble ikke åpnet / fant ikke creative-seksjon" };
+  }
+
+  await ensureAllTilesMounted(collapseRow);
+  await sleep(120);
 
   const btn = getAddOptionalBtn(collapseRow);
-  if (!btn) return { ok:false, reason:"Fant ikke 'Legg til valgfri materiell'-knapp i linja" };
+  if (!btn) return { ok:false, reason:"Fant ikke 'Legg til valgfri materiell' i den åpne linja" };
 
   const tilesBefore = countTilesInCollapse(collapseRow);
 
-  // Snapshot av eksisterende menyer (MUI-portal)
-  const menusBefore = Array.from(document.querySelectorAll('div[role="menu"].dropdown---dropdown-menu---1fkH0'));
+  // 2) Snapshot av synlige menyer før klikk
+  const visibleMenusBefore = Array.from(document.querySelectorAll('[role="menu"]')).filter(isVisibleMenu);
 
-  // Åpne meny for DENNE linja
   btn.scrollIntoView({ block:'center' });
   btn.click();
 
-  // Finn menyen som dukker opp etter klikk (ny, ellers siste synlige)
+  // 3) Finn menyen robust:
+  // - ny synlig meny som dukket opp
+  // - eller en synlig meny som inneholder ønsket sizeText
   const menu = await waitFor(() => {
-    const menusNow = Array.from(document.querySelectorAll('div[role="menu"].dropdown---dropdown-menu---1fkH0'));
-    const newOnes  = menusNow.filter(m => !menusBefore.includes(m));
-    const cand     = (newOnes.length ? newOnes : menusNow).filter(isVisibleMenu);
-    return cand.length ? cand[cand.length - 1] : null;
-  }, 2500, 60);
+    const menusNow = Array.from(document.querySelectorAll('[role="menu"]')).filter(isVisibleMenu);
+
+    // prøv: ny meny
+    const newOnes = menusNow.filter(m => !visibleMenusBefore.includes(m));
+    const candidates = newOnes.length ? newOnes : menusNow;
+
+    // velg den som faktisk inneholder sizeText (best signal)
+    const want = String(sizeText).trim();
+    const hit = candidates.find(m => (m.innerText || "").split("\n").some(line => line.trim() === want));
+    if (hit) return hit;
+
+    // fallback: siste synlige meny
+    return candidates.length ? candidates[candidates.length - 1] : null;
+  }, 3000, 80);
 
   if (!menu) return { ok:false, reason:"Meny dukket ikke opp" };
 
-  // Finn riktig item INNI den menyen
-  const wanted = Array.from(menu.querySelectorAll('[role="menuitem"], .dropdown---menu-item---1LjoL'))
-    .find(el => (el.textContent || "").trim() === String(sizeText).trim());
+  // 4) Klikk riktig item
+  const want = String(sizeText).trim();
+  const wanted = Array.from(menu.querySelectorAll('[role="menuitem"], [role="option"], button, div'))
+    .find(el => (el.textContent || "").trim() === want);
 
   if (!wanted) {
     document.body.click();
@@ -1229,8 +1236,8 @@ async function addSizeScopedToLine(dataRow, sizeText){
   wanted.scrollIntoView({ block:'center' });
   wanted.click();
 
-  // Verifiser at akkurat DENNE linja fikk en ny tile
-  const ok = await waitFor(() => countTilesInCollapse(collapseRow) === tilesBefore + 1, 3000, 80);
+  // 5) Verifiser at DENNE linja fikk ny tile
+  const ok = await waitFor(() => countTilesInCollapse(collapseRow) >= tilesBefore + 1, 4000, 100);
   if (!ok) return { ok:false, reason:"Klikk utført, men ingen ny tile dukket opp i denne linja" };
 
   return { ok:true };
@@ -1238,22 +1245,28 @@ async function addSizeScopedToLine(dataRow, sizeText){
 
 
 
+
 function countTilesForSizeVariant(detailsList, size, variant){
   const want = cs(size);
   const vWant = variant || null;
+  const seen = new Set();
   let n = 0;
+
   for (const det of (detailsList || [])) {
-    const tiles = getAllTiles(det);
-    for (const t of tiles) {
+    for (const t of getAllTiles(det)) {
+      if (seen.has(t)) continue;
       if (!tileHasSize(t, want)) continue;
+
       const tv = tileVariant(t) || null;
       if (vWant && tv !== vWant) continue;
-      if (!vWant && tv) { /* ok: variant-løse tiles også */ }
+
+      seen.add(t);
       n++;
     }
   }
   return n;
 }
+
 
 async function rebuildDetailsAndEntries(rowsForId){
   // Expand all rows for this ID and collect all "collapse rows" (details)
@@ -1345,7 +1358,9 @@ async function runOnIds(ids){
 
         const needList=[];
         for(const [k, scriptsCount] of scriptsBySV.entries()){
-          const tilesCount = tileCountBySV.get(k)||0;
+          const [sz, vr] = k.split('|');
+const tilesCount = countTilesForSizeVariant(detailsList, sz, vr || null);
+
           const need = Math.max(0, scriptsCount - tilesCount);
           if(need>0){
             const [sz]=k.split('|');
