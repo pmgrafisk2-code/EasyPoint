@@ -1278,51 +1278,87 @@ async function rebuildDetailsAndEntries(rowsForId){
 async function addOptionalMaterialSizeForLine(lineRootEl, sizeStr){
   const norm = s => String(s||"").replace(/\s+/g,"").toLowerCase();
 
-  // Finn dropdown-toggle for "Legg til valgfri materiell" innenfor riktig linje
-  const toggles = Array.from(lineRootEl.querySelectorAll('button'))
-    .filter(b => /legg til valgfri materiell/i.test(b.innerText || b.textContent || ""));
+  // 1) finn dropdown i linja
+  const dropdowns = Array.from(lineRootEl.querySelectorAll('.dropdown---dropdown---1yvIZ,[class*="dropdown---dropdown---"]'))
+    .filter(vis);
 
-  const toggleBtn = toggles[0] || null;
-  if (!toggleBtn) return { ok:false, why:"Fant ikke 'Legg til valgfri materiell' i linja" };
+  const dd = dropdowns.find(el => /legg til valgfri materiell/i.test(el.innerText || ""));
+  const root = dd || lineRootEl;
 
-  // Åpne dropdown (ofte bedre med mousedown/pointerdown på custom dropdowns)
-  const open = () => {
-    toggleBtn.scrollIntoView({ block:"center", inline:"center" });
-    toggleBtn.dispatchEvent(new MouseEvent("mousedown", { bubbles:true, cancelable:true, view:window }));
-    toggleBtn.dispatchEvent(new MouseEvent("mouseup",   { bubbles:true, cancelable:true, view:window }));
-    toggleBtn.dispatchEvent(new MouseEvent("click",     { bubbles:true, cancelable:true, view:window }));
-  };
+  // 2) finn toggle-knappen i denne dropdownen
+  const toggleBtn =
+    Array.from(root.querySelectorAll('button[aria-haspopup="true"],button'))
+      .filter(vis)
+      .find(b => /legg til valgfri materiell/i.test(b.innerText || b.textContent || ""));
 
-  open();
+  if (!toggleBtn) return { ok:false, why:"Fant ikke toggle-knapp i linja" };
 
-  // Vent på meny (role="menu" med header "Add size:" eller menuitems)
+  // 3) åpne dropdown
+  toggleBtn.scrollIntoView({ block:"center", inline:"center" });
+  toggleBtn.dispatchEvent(new MouseEvent("pointerdown", { bubbles:true, cancelable:true, view:window }));
+  toggleBtn.dispatchEvent(new MouseEvent("mousedown",  { bubbles:true, cancelable:true, view:window }));
+  toggleBtn.dispatchEvent(new MouseEvent("mouseup",    { bubbles:true, cancelable:true, view:window }));
+  toggleBtn.click();
+
+  // 4) finn riktig menu: den synlige som er nærmest knappen vi klikket
   const menu = await waitFor(() => {
-    // Menyen kan ligge inni samme wrapper ELLER være portalled til body
-    const candidateMenus = Array.from(document.querySelectorAll('[role="menu"]'));
-    // velg den som inneholder "Add size:" eller 580x500
-    return candidateMenus.find(m => /add size/i.test(m.innerText || "") || /580x500/.test(m.innerText || ""));
-  }, 2000, 50);
+    const btnRect = toggleBtn.getBoundingClientRect();
+    const menus = Array.from(document.querySelectorAll('[role="menu"]')).filter(vis);
+
+    if (!menus.length) return null;
+
+    // velg nærmeste menu til knappen (MUI popper = fysisk nær)
+    let best = null;
+    let bestDist = Infinity;
+
+    for (const m of menus){
+      const r = m.getBoundingClientRect();
+      const cx = r.left + r.width/2;
+      const cy = r.top  + r.height/2;
+      const bx = btnRect.left + btnRect.width/2;
+      const by = btnRect.top  + btnRect.height/2;
+      const dist = Math.hypot(cx - bx, cy - by);
+      if (dist < bestDist){
+        bestDist = dist;
+        best = m;
+      }
+    }
+    return best;
+  }, 2500, 60);
 
   if (!menu) return { ok:false, why:"Dropdown-meny dukket ikke opp" };
 
-  // Finn ønsket menuitem
+  // 5) finn og klikk ønsket størrelse I DEN MENYEN
   const wanted = Array.from(menu.querySelectorAll('[role="menuitem"]'))
     .find(mi => norm(mi.innerText || mi.textContent || "") === norm(sizeStr));
 
-  if (!wanted) {
-    // Noen ganger er teksten i child div
-    const wanted2 = Array.from(menu.querySelectorAll('[role="menuitem"] *'))
-      .find(n => norm(n.innerText || n.textContent || "") === norm(sizeStr));
-    if (!wanted2) return { ok:false, why:`Fant ikke størrelse-valg i menyen: ${sizeStr}` };
-    wanted2.closest('[role="menuitem"]')?.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,view:window}));
-  } else {
-    wanted.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,view:window}));
-  }
+  if (!wanted) return { ok:false, why:`Fant ikke størrelse-valg i menyen: ${sizeStr}` };
 
-  // Vent litt på at UI faktisk legger til tile (kan trigge nettverkskall)
-  await sleep(350);
+  wanted.scrollIntoView({ block:"center" });
+  wanted.dispatchEvent(new MouseEvent("mousedown", { bubbles:true, cancelable:true, view:window }));
+  wanted.dispatchEvent(new MouseEvent("mouseup",   { bubbles:true, cancelable:true, view:window }));
+  wanted.click();
 
+  await sleep(450);
   return { ok:true };
+}
+
+
+function countTilesForSizeVariant(detailsList, size, variant){
+  const want = cs(size);
+  const vWant = variant || null;
+  let n = 0;
+  for (const det of (detailsList || [])) {
+    const tiles = getAllTiles(det);
+    for (const t of tiles) {
+      if (!tileHasSize(t, want)) continue;
+      const tv = tileVariant(t) || null;
+      if (vWant && tv !== vWant) continue;
+      if (!vWant && tv) { /* ok: variant-løse tiles også */ }
+      n++;
+    }
+  }
+  return n;
 }
 
 
@@ -1393,6 +1429,9 @@ async function runOnIds(ids){
               await waitForIdle();
 LOG(`   · prøver å legge til ${x.size} (scope for linje ${id})`);
 
+const variant = null; // du bruker ikke variant i needList nå (kun size)
+const beforeCount = countTilesForSizeVariant(detailsList, x.size, variant);
+
 let ok = false;
 let why = '';
 
@@ -1400,14 +1439,32 @@ for (const det of (detailsList || [])) {
   const res = await addOptionalMaterialSizeForLine(det, x.size);
   ok = !!res?.ok;
   why = res?.why || '';
-  if (ok) break;
+  if (!ok) continue;
+
+  await sleep(450);
+  for (const dd of (detailsList || [])) await ensureAllTilesMounted(dd || d);
+
+  const afterCount = countTilesForSizeVariant(detailsList, x.size, variant);
+  if (afterCount > beforeCount) { ok = true; break; }
+
+  // hvis vi “klikket” men ingenting ble lagt til, fortsett og prøv neste det
+  ok = false;
+  why = 'Klikk utført, men ingen ny tile dukket opp';
 }
 
-// fallback (hvis UI er portalled/ligger utenfor det)
+// fallback siste sjanse (portal / rare DOM-plasseringer)
 if (!ok) {
   const res2 = await addOptionalMaterialSizeForLine(document, x.size);
   ok = !!res2?.ok;
   why = res2?.why || why;
+
+  if (ok) {
+    await sleep(450);
+    for (const dd of (detailsList || [])) await ensureAllTilesMounted(dd || d);
+    const afterCount2 = countTilesForSizeVariant(detailsList, x.size, variant);
+    ok = (afterCount2 > beforeCount);
+    if (!ok) why = 'Global-klikk, men ingen ny tile dukket opp';
+  }
 }
 
 if (!ok) {
@@ -1416,15 +1473,7 @@ if (!ok) {
 }
 
 LOG(`   + La til størrelse: ${x.size}`);
-await sleep(450);
 
-// mount tiles i alle detaljer (etter at ny tile er lagt til)
-for (const det of (detailsList || [])) {
-  await ensureAllTilesMounted(det || d);
-}
-
-
-LOG(`   + La til størrelse: ${x.size}`);
 await sleep(450);
 
 // mount tiles i alle detaljer (ikke bare document)
