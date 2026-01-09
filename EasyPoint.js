@@ -19,6 +19,12 @@ function getAddOptionalBtn(scope){
   return btn || null;
 }
 
+// alias (i tilfelle noe fortsatt kaller feil casing)
+function getaddoptionalBtn(scope){
+  return getAddOptionalBtn(scope);
+}
+
+
 function countTilesInCollapse(collapseRow){
   if(!collapseRow) return 0;
   return collapseRow.querySelectorAll('.set-creativeTile, .set-creativeTile__selected').length;
@@ -1235,13 +1241,6 @@ async function ensureLineExpanded(dataRow){
 }
 
 // ---------- Meny visibility (robust) ----------
-function isVisibleMenu(el){
-  if(!el) return false;
-  const st = getComputedStyle(el);
-  if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
-  const r = el.getBoundingClientRect();
-  return r.width > 0 && r.height > 0;
-}
 
 
 
@@ -1251,9 +1250,61 @@ function countTilesInCollapse(collapseRow){
 }
 
 
-// ---------- Add size (LINJE-SCOPED) - patched ----------
+// ---------- Meny visibility (robust) ----------
+function isVisiblePopup(el){
+  if(!el) return false;
+  const st = getComputedStyle(el);
+  if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+  if (el.getAttribute('aria-hidden') === 'true') return false;
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0;
+}
+
+function normTxt(s){
+  return String(s||'').replace(/\s+/g,' ').trim().toLowerCase();
+}
+
+function doPointerClick(el){
+  if(!el) return;
+  try { el.scrollIntoView({block:'center'}); } catch {}
+  el.dispatchEvent(new MouseEvent('pointerdown', { bubbles:true }));
+  el.dispatchEvent(new MouseEvent('mousedown',  { bubbles:true }));
+  el.dispatchEvent(new MouseEvent('mouseup',    { bubbles:true }));
+  el.click();
+}
+
+// Finn popup/meny NÆRMEST knappen (bedre enn "siste i DOM")
+function pickNearestTo(btn, nodes){
+  if(!btn || !nodes?.length) return null;
+  const br = btn.getBoundingClientRect();
+  const bx = br.left + br.width/2;
+  const by = br.top  + br.height/2;
+
+  let best=null, bestD=Infinity;
+  for(const n of nodes){
+    const r = n.getBoundingClientRect();
+    const x = r.left + r.width/2;
+    const y = r.top  + r.height/2;
+    const d = Math.hypot(x-bx, y-by);
+    if(d < bestD){ bestD=d; best=n; }
+  }
+  return best;
+}
+
+function getPopupCandidates(root=document){
+  // Støtter både dropdown- og MUI-varianter
+  return Array.from(root.querySelectorAll([
+    'div[role="menu"]',
+    'div[role="listbox"]',
+    '[role="presentation"] .MuiPaper-root',
+    '.MuiPopover-root .MuiPaper-root',
+    '.MuiMenu-paper',
+    'div[class*="dropdown---dropdown-menu---"]'
+  ].join(',')));
+}
+
+// ---------- Add size (LINJE-SCOPED) - robust ----------
 async function addSizeScopedToLine(dataRow, sizeText){
-  // 1) sørg for at linja er åpen
   const collapseRow = await ensureLineExpanded(dataRow);
   if (!collapseRow) return { ok:false, reason:"Fant ikke collapse-rad / klarte ikke ekspandere linja" };
 
@@ -1262,49 +1313,74 @@ async function addSizeScopedToLine(dataRow, sizeText){
 
   const tilesBefore = countTilesInCollapse(collapseRow);
 
-  // 2) åpne meny
-  btn.scrollIntoView({ block:'center' });
-  btn.click();
+  // 1) Klikk for å åpne meny
+  await sleep(80);
+  doPointerClick(btn);
 
-  // 3) finn MENYEN (først lokalt i collapseRow, så fallback globalt)
+  // 2) Vent på synlig popup/meny (portal kan være i body)
   const menu = await waitFor(() => {
-    // lokalt
-    const local = Array.from(
-      collapseRow.querySelectorAll('div[role="menu"].dropdown---dropdown-menu---1fkH0, div[role="menu"]')
-    ).filter(isVisibleMenu);
-    if (local.length) return local[local.length - 1];
+    // sjekk globalt (portal) + lokalt
+    const global = getPopupCandidates(document).filter(isVisiblePopup);
+    if (!global.length) return null;
 
-    // fallback globalt (noen ganger portales den likevel)
-    const global = Array.from(
-      document.querySelectorAll('div[role="menu"].dropdown---dropdown-menu---1fkH0, div[role="menu"]')
-    ).filter(isVisibleMenu);
-    return global.length ? global[global.length - 1] : null;
-  }, 2500, 60);
+    // velg den som er nærmest knappen
+    const best = pickNearestTo(btn, global);
+    return best || global[global.length - 1];
+  }, 3000, 60);
 
-  if (!menu) return { ok:false, reason:"Meny dukket ikke opp" };
+  if (!menu) {
+    // lite fallback: prøv å klikke én gang til (noen ganger “spiser” UI første klikk)
+    await sleep(120);
+    doPointerClick(btn);
 
-  // 4) finn ønsket item – match på synlig tekst (innerText) siden teksten ligger inni en div
-  const wanted = Array.from(menu.querySelectorAll('[role="menuitem"], .dropdown---menu-item---1LjoL'))
-    .find(el => (el.innerText || el.textContent || '').trim() === String(sizeText).trim());
+    const menu2 = await waitFor(() => {
+      const global = getPopupCandidates(document).filter(isVisiblePopup);
+      if (!global.length) return null;
+      return pickNearestTo(btn, global) || global[global.length - 1];
+    }, 2500, 60);
 
-  if (!wanted) {
-    // lukk meny hvis mulig
-    try { document.body.click(); } catch {}
-    // litt mer debug-info kan være nyttig:
-    const allItems = Array.from(menu.querySelectorAll('[role="menuitem"], .dropdown---menu-item---1LjoL'))
-      .map(el => (el.innerText || el.textContent || '').trim())
-      .filter(Boolean);
-    return { ok:false, reason:`Fant ikke størrelse '${sizeText}' i menyen. Fantes: ${allItems.join(', ')}` };
+    if (!menu2) return { ok:false, reason:"Meny dukket ikke opp" };
+    // bruk menu2 videre
+    return await _chooseSizeFromMenuAndVerify(menu2);
   }
 
-  wanted.scrollIntoView({ block:'center' });
-  wanted.click();
+  return await _chooseSizeFromMenuAndVerify(menu);
 
-  // 5) verifiser at DENNE linja fikk en ny tile
-  const ok = await waitFor(() => countTilesInCollapse(collapseRow) === tilesBefore + 1, 3500, 80);
-  if (!ok) return { ok:false, reason:"Klikk utført, men ingen ny tile dukket opp i denne linja" };
+  // --- intern helper: velg størrelse + verifiser tile +1 ---
+  async function _chooseSizeFromMenuAndVerify(menuEl){
+    const want = normTxt(sizeText);
 
-  return { ok:true };
+    // menuitems kan være role=menuitem, role=option, divs, lis etc.
+    const items = Array.from(menuEl.querySelectorAll([
+      '[role="menuitem"]',
+      '[role="option"]',
+      '.dropdown---menu-item---1LjoL',
+      'li',
+      'div'
+    ].join(',')))
+    .filter(isVisiblePopup)
+    .map(el => ({ el, t: normTxt(el.innerText || el.textContent || '') }))
+    .filter(x => x.t);
+
+    // match eksakt først, så contains
+    let hit = items.find(x => x.t === want) || items.find(x => x.t.includes(want));
+
+    if (!hit){
+      // Escape for å lukke meny hvis den henger
+      try { document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true })); } catch {}
+      const all = items.map(x=>x.t).slice(0,25).join(', ');
+      return { ok:false, reason:`Fant ikke størrelse '${sizeText}' i menyen. Fantes: ${all || '(ingen)'}`
+      };
+    }
+
+    doPointerClick(hit.el);
+
+    // verifiser at DENNE linja fikk en ny tile
+    const ok = await waitFor(() => countTilesInCollapse(collapseRow) >= tilesBefore + 1, 4500, 80);
+    if (!ok) return { ok:false, reason:"Klikk utført, men ingen ny tile dukket ikke opp i denne linja" };
+
+    return { ok:true };
+  }
 }
 
 
