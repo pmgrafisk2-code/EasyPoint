@@ -1196,7 +1196,10 @@ function getCollapseRowForDataRow(dataRow){
 async function ensureLineExpanded(dataRow){
   // Hvis collapse-raden allerede finnes og har creative section, er vi good
   let collapseRow = getCollapseRowForDataRow(dataRow);
-  if (collapseRow && collapseRow.querySelector('.set-matSpecCreativeSection')) return collapseRow;
+  if (collapseRow && collapseRow.querySelector('.set-matSpecCreativeSection, .set-creativeSectionContainer, .set-creativeContainer')) {
+  return collapseRow;
+}
+
 
   // Prøv å klikke expand
   const expBtn = getExpandBtnForDataRow(dataRow);
@@ -1223,6 +1226,23 @@ function isVisibleMenu(el){
   const r = el.getBoundingClientRect();
   return r.width > 0 && r.height > 0;
 }
+
+function getAddOptionalBtn(scope){
+  const root = scope || document;
+
+  // Typisk knappetekst
+  const btn = Array.from(root.querySelectorAll('button, [role="button"]'))
+    .filter(vis)
+    .find(b => /legg til valgfri materiell/i.test((b.innerText || b.textContent || '').trim()));
+
+  return btn || null;
+}
+
+function countTilesInCollapse(collapseRow){
+  if(!collapseRow) return 0;
+  return collapseRow.querySelectorAll('.set-creativeTile, .set-creativeTile__selected').length;
+}
+
 
 // ---------- Add size (LINJE-SCOPED) - patched ----------
 async function addSizeScopedToLine(dataRow, sizeText){
