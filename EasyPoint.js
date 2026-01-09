@@ -1251,29 +1251,31 @@ function countTilesInCollapse(collapseRow){
 
 
 // ---------- Meny visibility (robust) ----------
+// ---------- Meny visibility (robust) ----------
 function isVisiblePopup(el){
   if(!el) return false;
   const st = getComputedStyle(el);
-  if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+  if (st.display === 'none' || st.visibility === 'hidden') return false;
   if (el.getAttribute('aria-hidden') === 'true') return false;
   const r = el.getBoundingClientRect();
-  return r.width > 0 && r.height > 0;
+  return r.width > 2 && r.height > 2;
 }
 
-function normTxt(s){
-  return String(s||'').replace(/\s+/g,' ').trim().toLowerCase();
+function getPopupCandidates(root=document){
+  // inkluder flere MUI/portal-varianter + dine dropdown-klasser
+  return Array.from(root.querySelectorAll([
+    'div[role="menu"]',
+    'div[role="listbox"]',
+    '[role="presentation"] .MuiPaper-root',
+    '.MuiPopover-root .MuiPaper-root',
+    '.MuiMenu-paper',
+    '.MuiPopper-root .MuiPaper-root',
+    'div[class*="dropdown---dropdown-menu---"]',
+    'div[class*="dropdown---menu---"]',
+  ].join(',')));
 }
 
-function doPointerClick(el){
-  if(!el) return;
-  try { el.scrollIntoView({block:'center'}); } catch {}
-  el.dispatchEvent(new MouseEvent('pointerdown', { bubbles:true }));
-  el.dispatchEvent(new MouseEvent('mousedown',  { bubbles:true }));
-  el.dispatchEvent(new MouseEvent('mouseup',    { bubbles:true }));
-  el.click();
-}
-
-// Finn popup/meny NÆRMEST knappen (bedre enn "siste i DOM")
+// Finn popup/meny NÆRMEST knappen
 function pickNearestTo(btn, nodes){
   if(!btn || !nodes?.length) return null;
   const br = btn.getBoundingClientRect();
@@ -1291,16 +1293,17 @@ function pickNearestTo(btn, nodes){
   return best;
 }
 
-function getPopupCandidates(root=document){
-  // Støtter både dropdown- og MUI-varianter
-  return Array.from(root.querySelectorAll([
-    'div[role="menu"]',
-    'div[role="listbox"]',
-    '[role="presentation"] .MuiPaper-root',
-    '.MuiPopover-root .MuiPaper-root',
-    '.MuiMenu-paper',
-    'div[class*="dropdown---dropdown-menu---"]'
-  ].join(',')));
+function normTxt(s){
+  return String(s||'').replace(/\s+/g,' ').trim().toLowerCase();
+}
+
+function doPointerClick(el){
+  if(!el) return;
+  try { el.scrollIntoView({block:'center'}); } catch {}
+  el.dispatchEvent(new MouseEvent('pointerdown', { bubbles:true }));
+  el.dispatchEvent(new MouseEvent('mousedown',  { bubbles:true }));
+  el.dispatchEvent(new MouseEvent('mouseup',    { bubbles:true }));
+  el.click();
 }
 
 // ---------- Add size (LINJE-SCOPED) - robust ----------
@@ -1308,79 +1311,70 @@ async function addSizeScopedToLine(dataRow, sizeText){
   const collapseRow = await ensureLineExpanded(dataRow);
   if (!collapseRow) return { ok:false, reason:"Fant ikke collapse-rad / klarte ikke ekspandere linja" };
 
+  // Hvis størrelsen allerede finnes i denne linja, ikke legg til en til
+  const already = Array.from(collapseRow.querySelectorAll('.set-creativeTile, .set-creativeTile__selected'))
+    .some(t => tileHasSize(t, cs(sizeText)));
+  if (already) return { ok:true, reason:"Størrelsen finnes allerede (skip)" };
+
   const btn = getAddOptionalBtn(collapseRow);
   if (!btn) return { ok:false, reason:"Fant ikke 'Legg til valgfri materiell'-knapp i linja" };
 
-  const tilesBefore = countTilesInCollapse(collapseRow);
+  const want = normTxt(sizeText);
 
-  // 1) Klikk for å åpne meny
+  // 1) åpne meny
   await sleep(80);
   doPointerClick(btn);
 
-  // 2) Vent på synlig popup/meny (portal kan være i body)
-  const menu = await waitFor(() => {
-    // sjekk globalt (portal) + lokalt
-    const global = getPopupCandidates(document).filter(isVisiblePopup);
-    if (!global.length) return null;
-
-    // velg den som er nærmest knappen
-    const best = pickNearestTo(btn, global);
-    return best || global[global.length - 1];
+  // 2) finn meny (portal kan ligge i body)
+  let menu = await waitFor(() => {
+    const all = getPopupCandidates(document).filter(isVisiblePopup);
+    if (!all.length) return null;
+    return pickNearestTo(btn, all) || all[all.length - 1];
   }, 3000, 60);
 
-  if (!menu) {
-    // lite fallback: prøv å klikke én gang til (noen ganger “spiser” UI første klikk)
-    await sleep(120);
+  // fallback: klikk en gang til
+  if (!menu){
+    await sleep(140);
     doPointerClick(btn);
-
-    const menu2 = await waitFor(() => {
-      const global = getPopupCandidates(document).filter(isVisiblePopup);
-      if (!global.length) return null;
-      return pickNearestTo(btn, global) || global[global.length - 1];
+    menu = await waitFor(() => {
+      const all = getPopupCandidates(document).filter(isVisiblePopup);
+      if (!all.length) return null;
+      return pickNearestTo(btn, all) || all[all.length - 1];
     }, 2500, 60);
-
-    if (!menu2) return { ok:false, reason:"Meny dukket ikke opp" };
-    // bruk menu2 videre
-    return await _chooseSizeFromMenuAndVerify(menu2);
   }
 
-  return await _chooseSizeFromMenuAndVerify(menu);
+  if (!menu) return { ok:false, reason:"Meny dukket ikke opp" };
 
-  // --- intern helper: velg størrelse + verifiser tile +1 ---
-  async function _chooseSizeFromMenuAndVerify(menuEl){
-    const want = normTxt(sizeText);
+  // 3) finn item i meny
+  const items = Array.from(menu.querySelectorAll([
+    '[role="menuitem"]',
+    '[role="option"]',
+    'button',
+    'li',
+    'div'
+  ].join(',')))
+  .filter(isVisiblePopup)
+  .map(el => ({ el, t: normTxt(el.innerText || el.textContent || '') }))
+  .filter(x => x.t);
 
-    // menuitems kan være role=menuitem, role=option, divs, lis etc.
-    const items = Array.from(menuEl.querySelectorAll([
-      '[role="menuitem"]',
-      '[role="option"]',
-      '.dropdown---menu-item---1LjoL',
-      'li',
-      'div'
-    ].join(',')))
-    .filter(isVisiblePopup)
-    .map(el => ({ el, t: normTxt(el.innerText || el.textContent || '') }))
-    .filter(x => x.t);
-
-    // match eksakt først, så contains
-    let hit = items.find(x => x.t === want) || items.find(x => x.t.includes(want));
-
-    if (!hit){
-      // Escape for å lukke meny hvis den henger
-      try { document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true })); } catch {}
-      const all = items.map(x=>x.t).slice(0,25).join(', ');
-      return { ok:false, reason:`Fant ikke størrelse '${sizeText}' i menyen. Fantes: ${all || '(ingen)'}`
-      };
-    }
-
-    doPointerClick(hit.el);
-
-    // verifiser at DENNE linja fikk en ny tile
-    const ok = await waitFor(() => countTilesInCollapse(collapseRow) >= tilesBefore + 1, 4500, 80);
-    if (!ok) return { ok:false, reason:"Klikk utført, men ingen ny tile dukket ikke opp i denne linja" };
-
-    return { ok:true };
+  const hit = items.find(x => x.t === want) || items.find(x => x.t.includes(want));
+  if (!hit){
+    try { document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true })); } catch {}
+    const all = items.map(x=>x.t).slice(0,30).join(', ');
+    return { ok:false, reason:`Fant ikke størrelse '${sizeText}' i menyen. Fantes: ${all || '(ingen)'}` };
   }
+
+  doPointerClick(hit.el);
+
+  // 4) verifiser: IKKE bare +1 count (virtualisering kan lyve) – sjekk at size faktisk dukker opp
+  const ok = await waitFor(() => {
+    const tiles = Array.from(collapseRow.querySelectorAll('.set-creativeTile, .set-creativeTile__selected'));
+    return tiles.some(t => tileHasSize(t, cs(sizeText)));
+  }, 6000, 80);
+
+  if (!ok) return { ok:false, reason:"Klikk utført, men størrelsen dukket ikke opp (mulig virtualisering/UI-lag)" };
+
+  return { ok:true };
 }
 
 
