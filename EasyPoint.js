@@ -346,6 +346,21 @@ function normalizeTagForCompare(s){
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
+
+
+async function getEditorValueStable(editor, tries = 8, step = 120){
+  let last = null;
+  for (let i = 0; i < tries; i++){
+    const v = getEditorValue(editor);
+    if (v && v.trim()) return v;      // har innhold => ferdig
+    if (v === last && i >= 2) return v; // stabilt tomt et par runder
+    last = v;
+    await sleep(step);
+  }
+  return getEditorValue(editor);
+}
+
+
 function getEditorValue(editor){
   if (!editor) return '';
   if (editor.kind === 'cm' && editor.cm) {
@@ -1328,55 +1343,67 @@ async function addSizeScopedToLine(dataRow, sizeText){
   const collapseRow = await ensureLineExpanded(dataRow);
   if (!collapseRow) return { ok:false, reason:"Fant ikke collapse-rad / klarte ikke ekspandere linja" };
 
-  const btn = getAddOptionalBtn(collapseRow);
-  if (!btn) return { ok:false, reason:"Fant ikke 'Legg til valgfri materiell'-knapp i linja" };
+  // Finn "Legg til valgfri materiell" (den indre MUI-knappen)
+  const innerBtn = getAddOptionalBtn(collapseRow);
+  if (!innerBtn) return { ok:false, reason:"Fant ikke 'Legg til valgfri materiell'-knapp i linja" };
+
+  // IMPORTANT: klikk dropdown-toggle (ytre button med aria-haspopup)
+  const toggleBtn =
+    innerBtn.closest('button[aria-haspopup="true"]') ||
+    innerBtn.closest('[role="button"][aria-haspopup="true"]') ||
+    innerBtn.closest('button');
+
+  if (!toggleBtn) return { ok:false, reason:"Fant ikke dropdown-toggle for 'Legg til valgfri materiell'" };
+
+  const dropdownRoot =
+    toggleBtn.closest('[class*="dropdown---dropdown---"]') || toggleBtn.parentElement;
 
   const beforeTotal = countTilesInCollapse(collapseRow);
   const beforeSize  = countSizeTilesInCollapse(collapseRow, sizeText);
 
   // 1) åpne meny
   await sleep(80);
-  doPointerClick(btn);
+  doPointerClick(toggleBtn);
 
-  // 2) finn meny (portal)
+  // 2) finn menyen LOKALT i samme dropdown (ikke portal)
   let menu = await waitFor(() => {
-    const all = getPopupCandidates(document).filter(isVisiblePopup);
-    if (!all.length) return null;
-    return pickNearestTo(btn, all) || all[all.length - 1];
-  }, 3000, 60);
+    if (!dropdownRoot) return null;
+    const m = dropdownRoot.querySelector('div[role="menu"]');
+    if (!m) return null;
+    // sjekk at den faktisk er "åpen"
+    const expanded = toggleBtn.getAttribute('aria-expanded');
+    if (expanded === 'false') return null;
+    return m;
+  }, 2500, 60);
 
   // fallback: klikk igjen
   if (!menu){
-    await sleep(140);
-    doPointerClick(btn);
+    await sleep(120);
+    doPointerClick(toggleBtn);
     menu = await waitFor(() => {
-      const all = getPopupCandidates(document).filter(isVisiblePopup);
-      if (!all.length) return null;
-      return pickNearestTo(btn, all) || all[all.length - 1];
+      if (!dropdownRoot) return null;
+      const m = dropdownRoot.querySelector('div[role="menu"]');
+      if (!m) return null;
+      const expanded = toggleBtn.getAttribute('aria-expanded');
+      if (expanded === 'false') return null;
+      return m;
     }, 2500, 60);
   }
 
-  if (!menu) return { ok:false, reason:"Meny dukket ikke opp" };
+  if (!menu) return { ok:false, reason:"Meny dukket ikke opp (aria-expanded ble aldri true)" };
 
   const want = normTxt(sizeText);
 
-  const items = Array.from(menu.querySelectorAll([
-    '[role="menuitem"]',
-    '[role="option"]',
-    'button',
-    'li',
-    'div'
-  ].join(',')))
-  .filter(isVisiblePopup)
-  .map(el => ({
-    el,
-    t: normTxt(el.innerText || el.textContent || ''),
-    disabled:
-      el.getAttribute('aria-disabled') === 'true' ||
-      el.classList.contains('Mui-disabled') ||
-      el.hasAttribute('disabled')
-  }))
-  .filter(x => x.t);
+  const items = Array.from(menu.querySelectorAll('[role="menuitem"],[role="option"]'))
+    .map(el => ({
+      el,
+      t: normTxt(el.innerText || el.textContent || ''),
+      disabled:
+        el.getAttribute('aria-disabled') === 'true' ||
+        el.classList.contains('Mui-disabled') ||
+        el.hasAttribute('disabled')
+    }))
+    .filter(x => x.t);
 
   const hit = items.find(x => x.t === want) || items.find(x => x.t.includes(want));
   if (!hit){
@@ -1386,12 +1413,12 @@ async function addSizeScopedToLine(dataRow, sizeText){
   }
 
   if (hit.disabled){
-    return { ok:false, reason:`'${sizeText}' er disabled i menyen (AdPoint tillater trolig ikke flere av samme størrelse på denne linja)` };
+    return { ok:false, reason:`'${sizeText}' er disabled i menyen (AdPoint tillater trolig ikke flere av samme størrelse akkurat nå)` };
   }
 
   doPointerClick(hit.el);
 
-  // 3) verifiser at det faktisk kom en NY tile for den størrelsen
+  // 3) verifiser at det faktisk kom en NY tile for den størrelsen (eller total økte)
   const ok = await waitFor(() => {
     const nowSize  = countSizeTilesInCollapse(collapseRow, sizeText);
     const nowTotal = countTilesInCollapse(collapseRow);
@@ -1402,12 +1429,13 @@ async function addSizeScopedToLine(dataRow, sizeText){
     const nowSize = countSizeTilesInCollapse(collapseRow, sizeText);
     return {
       ok:false,
-      reason:`Klikk utført, men ingen ny tile ble lagt til (før=${beforeSize}, nå=${nowSize}). AdPoint kan blokkere duplikate størrelser.`
+      reason:`Klikk utført, men ingen ny tile ble lagt til (før=${beforeSize}, nå=${nowSize}).`
     };
   }
 
   return { ok:true };
 }
+
 
 
 
@@ -1524,17 +1552,16 @@ async function runOnIds(ids){
         }
 
         const needList=[];
-        for(const [k, scriptsCount] of scriptsBySV.entries()){
-// ... inni for(const [k, scriptsCount] of scriptsBySV.entries()) {
-const [sz, vr] = k.split('|');
-const tilesCount = countTilesForSizeVariant(detailsList, sz, vr || null);
+        for (const [k, scriptsCount] of scriptsBySV.entries()){
+  const [sz, vr] = k.split('|');
+  const tilesCount = countTilesForSizeVariant(detailsList, sz, vr || null);
 
-// Legg kun til hvis størrelsen mangler helt:
-if (tilesCount === 0 && scriptsCount > 0) {
-  needList.push({ size: sz, variant: (vr || null), need: 1 });
+  const need = Math.max(0, scriptsCount - tilesCount);
+  if (need > 0) {
+    needList.push({ size: sz, variant: (vr || null), need });
+  }
 }
 
-        }
 
         if(needList.length){
           LOG(`   · Legg-til plan (${id}): ` + needList.map(x=>`${x.size}×${x.need}`).join(', '));
@@ -1656,9 +1683,10 @@ if (!res?.ok){
           if (!editor) { LOG('   ! Fant ikke 3rd-party editor'); stats.err++; continue; }
 
           if (overwriteMode === 'empty') {
-            const current = getEditorValue(editor);
-            if (!isEmpty3PValue(current)) { skipped++; continue; }
-          }
+  const current = await getEditorValueStable(editor, 8, 120);
+  if (!isEmpty3PValue(current)) { skipped++; continue; }
+}
+
 
           const tagStr = (typeof payload === 'string') ? payload : (payload?.tag || '');
           const pasted = await pasteWithVerify(editor, tagStr, 2);
