@@ -1307,32 +1307,39 @@ function doPointerClick(el){
 }
 
 // ---------- Add size (LINJE-SCOPED) - robust ----------
+function countSizeTilesInCollapse(collapseRow, sizeText){
+  if(!collapseRow) return 0;
+  const want = cs(sizeText);
+  const tiles = Array.from(collapseRow.querySelectorAll('.set-creativeTile, .set-creativeTile__selected'));
+  let n = 0;
+  for(const t of tiles){
+    if(tileHasSize(t, want)) n++;
+  }
+  return n;
+}
+
 async function addSizeScopedToLine(dataRow, sizeText){
   const collapseRow = await ensureLineExpanded(dataRow);
   if (!collapseRow) return { ok:false, reason:"Fant ikke collapse-rad / klarte ikke ekspandere linja" };
 
-  // Hvis størrelsen allerede finnes i denne linja, ikke legg til en til
-  const already = Array.from(collapseRow.querySelectorAll('.set-creativeTile, .set-creativeTile__selected'))
-    .some(t => tileHasSize(t, cs(sizeText)));
-  if (already) return { ok:true, reason:"Størrelsen finnes allerede (skip)" };
-
   const btn = getAddOptionalBtn(collapseRow);
   if (!btn) return { ok:false, reason:"Fant ikke 'Legg til valgfri materiell'-knapp i linja" };
 
-  const want = normTxt(sizeText);
+  const beforeTotal = countTilesInCollapse(collapseRow);
+  const beforeSize  = countSizeTilesInCollapse(collapseRow, sizeText);
 
   // 1) åpne meny
   await sleep(80);
   doPointerClick(btn);
 
-  // 2) finn meny (portal kan ligge i body)
+  // 2) finn meny (portal)
   let menu = await waitFor(() => {
     const all = getPopupCandidates(document).filter(isVisiblePopup);
     if (!all.length) return null;
     return pickNearestTo(btn, all) || all[all.length - 1];
   }, 3000, 60);
 
-  // fallback: klikk en gang til
+  // fallback: klikk igjen
   if (!menu){
     await sleep(140);
     doPointerClick(btn);
@@ -1345,7 +1352,8 @@ async function addSizeScopedToLine(dataRow, sizeText){
 
   if (!menu) return { ok:false, reason:"Meny dukket ikke opp" };
 
-  // 3) finn item i meny
+  const want = normTxt(sizeText);
+
   const items = Array.from(menu.querySelectorAll([
     '[role="menuitem"]',
     '[role="option"]',
@@ -1354,28 +1362,47 @@ async function addSizeScopedToLine(dataRow, sizeText){
     'div'
   ].join(',')))
   .filter(isVisiblePopup)
-  .map(el => ({ el, t: normTxt(el.innerText || el.textContent || '') }))
+  .map(el => ({
+    el,
+    t: normTxt(el.innerText || el.textContent || ''),
+    disabled:
+      el.getAttribute('aria-disabled') === 'true' ||
+      el.classList.contains('Mui-disabled') ||
+      el.hasAttribute('disabled')
+  }))
   .filter(x => x.t);
 
   const hit = items.find(x => x.t === want) || items.find(x => x.t.includes(want));
   if (!hit){
     try { document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true })); } catch {}
     const all = items.map(x=>x.t).slice(0,30).join(', ');
-    return { ok:false, reason:`Fant ikke størrelse '${sizeText}' i menyen. Fantes: ${all || '(ingen)'}` };
+    return { ok:false, reason:`Fant ikke '${sizeText}' i menyen. Fantes: ${all || '(ingen)'}` };
+  }
+
+  if (hit.disabled){
+    return { ok:false, reason:`'${sizeText}' er disabled i menyen (AdPoint tillater trolig ikke flere av samme størrelse på denne linja)` };
   }
 
   doPointerClick(hit.el);
 
-  // 4) verifiser: IKKE bare +1 count (virtualisering kan lyve) – sjekk at size faktisk dukker opp
+  // 3) verifiser at det faktisk kom en NY tile for den størrelsen
   const ok = await waitFor(() => {
-    const tiles = Array.from(collapseRow.querySelectorAll('.set-creativeTile, .set-creativeTile__selected'));
-    return tiles.some(t => tileHasSize(t, cs(sizeText)));
-  }, 6000, 80);
+    const nowSize  = countSizeTilesInCollapse(collapseRow, sizeText);
+    const nowTotal = countTilesInCollapse(collapseRow);
+    return (nowSize >= beforeSize + 1) || (nowTotal >= beforeTotal + 1);
+  }, 7000, 80);
 
-  if (!ok) return { ok:false, reason:"Klikk utført, men størrelsen dukket ikke opp (mulig virtualisering/UI-lag)" };
+  if (!ok){
+    const nowSize = countSizeTilesInCollapse(collapseRow, sizeText);
+    return {
+      ok:false,
+      reason:`Klikk utført, men ingen ny tile ble lagt til (før=${beforeSize}, nå=${nowSize}). AdPoint kan blokkere duplikate størrelser.`
+    };
+  }
 
   return { ok:true };
 }
+
 
 
 
