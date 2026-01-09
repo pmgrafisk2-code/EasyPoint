@@ -1113,86 +1113,156 @@ btnRun.onclick=()=>{
 };
 
 /* ========= (BEST EFFORT) add extra tiles ========= */
-function findOptionalMaterialArea(){
-  const needles = ['valgfri materiell','optional material','legg til'];
-  const blocks = [...document.querySelectorAll('div,section,aside')].filter(el=>vis(el));
-  for(const b of blocks){
-    const t=(b.innerText||'').toLowerCase();
-    if(needles.some(n=>t.includes(n))) return b;
-  }
-  return document.body;
-}
-async function tryAddTileOfSize(sizeStr){
-  const sizePretty = sizeStr.replace('x','×');
-  const root = findOptionalMaterialArea();
+/* ========= (BETTER) add extra tiles (dropdown + icon match) ========= */
 
-  const addBtns = [...root.querySelectorAll('button')].filter(vis).filter(b=>{
-    const t=(b.innerText||'').toLowerCase().trim();
-    return /legg\s*til|add/.test(t);
+// Språk-uavhengig: finn "Add optional creative placeholder" via ikon-path (samme på NO/EN)
+const ADD_PLACEHOLDER_ICON_D =
+  "M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2z";
+
+function isAddPlaceholderButton(btn){
+  if(!btn) return false;
+  const p = btn.querySelector?.('svg path');
+  return !!(p && p.getAttribute('d') === ADD_PLACEHOLDER_ICON_D);
+}
+
+function findAddDropdowns(scope){
+  const root = scope || document;
+
+  // Finn alle synlige knapper med riktig ikon
+  const addBtns = [...root.querySelectorAll('button')].filter(vis).filter(isAddPlaceholderButton);
+
+  // De sitter typisk inne i en dropdown-komponent: class*="dropdown---dropdown---"
+  const dropdowns = [];
+  for(const b of addBtns){
+    const dd =
+      b.closest?.('[class*="dropdown---dropdown---"]') ||
+      b.closest?.('[class*="dropdown"]') ||
+      null;
+
+    dropdowns.push(dd || b);
+  }
+
+  // Dedupe
+  return [...new Set(dropdowns.filter(Boolean))];
+}
+
+function countTilesOfSizeInDetails(detailsList, sizeStr){
+  let c = 0;
+  for(const det of (detailsList || [])){
+    const tiles = getAllTiles(det);
+    for(const t of tiles){
+      if(tileHasSize(t, sizeStr)) c++;
+    }
+  }
+  return c;
+}
+
+async function openDropdown(dd){
+  // I snapshottene dine finnes ofte en outer toggle: button.dropdown---dropdown-toggle---*
+  const toggle =
+    dd?.querySelector?.('button[class*="dropdown---dropdown-toggle---"]') ||
+    dd?.querySelector?.('button');
+
+  if(!toggle) return false;
+
+  try { toggle.scrollIntoView({block:'center'}); } catch {}
+  toggle.click();
+  await sleep(120);
+  return true;
+}
+
+function findVisiblePortalMenu(){
+  // Noen ganger ligger menyen i samme dropdown, andre ganger i en "portal"
+  const candidates = [
+    ...document.querySelectorAll('[class*="dropdown---dropdown-menu---"]'),
+    ...document.querySelectorAll('[role="menu"]'),
+    ...document.querySelectorAll('[role="listbox"]'),
+    ...document.querySelectorAll('.MuiMenu-list'),
+  ];
+  return candidates.find(vis) || null;
+}
+
+async function pickSizeFromMenu(menu, sizeStr){
+  const wanted = cs(sizeStr);
+  const pretty = cs(sizeStr.replace('x','×'));
+
+  const nodes = [...menu.querySelectorAll('[role="menuitem"], [role="option"], li, button, div')]
+    .filter(vis)
+    .filter(n => /\d{2,4}\s*[x×]\s*\d{2,4}/i.test(n.textContent || ''));
+
+  const hit = nodes.find(n => {
+    const t = cs(n.textContent || '');
+    return t === wanted || t.includes(wanted) || t === pretty || t.includes(pretty);
   });
 
-  const candidates = [];
-  for(const b of addBtns){
-    const wrap = b.closest('div') || root;
-    const combos = [...wrap.querySelectorAll('[role="combobox"], select, input')].filter(vis);
-    candidates.push({btn:b, combos, wrap});
-  }
+  if(!hit) return false;
 
-  for(const c of candidates){
-    const combo = c.combos.find(x=>x.matches('[role="combobox"]')) || c.combos.find(x=>x.tagName==='SELECT') || c.combos.find(x=>x.tagName==='INPUT');
-    if(!combo) continue;
+  try { hit.scrollIntoView({block:'center'}); } catch {}
+  hit.click();
+  await sleep(180);
+  return true;
+}
 
-    if(combo.tagName==='SELECT'){
-      const opts=[...combo.querySelectorAll('option')];
-      const hit=opts.find(o=>cs(o.textContent||'')===sizeStr || cs(o.value||'')===sizeStr || cs(o.textContent||'').includes(sizeStr));
-      if(!hit) continue;
-      combo.value = hit.value;
-      combo.dispatchEvent(new Event('input',{bubbles:true}));
-      combo.dispatchEvent(new Event('change',{bubbles:true}));
-      await sleep(80);
-      c.btn.click();
-      await sleep(450);
-      return true;
+async function tryAddTileOfSize(sizeStr, detailsList){
+  const before = countTilesOfSizeInDetails(detailsList || [], sizeStr);
+
+  // Prøv først inne i expanded details (mye mer presist enn document)
+  const scopes = (detailsList && detailsList.length) ? detailsList : [document];
+
+  for(const scope of scopes){
+    const dropdowns = findAddDropdowns(scope);
+
+    for(const dd of dropdowns){
+      if(!dd || !vis(dd)) continue;
+
+      // 1) Åpne dropdown
+      const opened = await openDropdown(dd);
+      if(!opened) continue;
+
+      // 2) Finn meny (inne i dd eller som portal)
+      const menu = await waitFor(() => {
+        const inside = dd.querySelector?.('[class*="dropdown---dropdown-menu---"]');
+        if(inside && vis(inside)) return inside;
+
+        // Noen ganger finnes den, men blir ikke "synlig" på offsetParent; prøv portal
+        const portal = findVisiblePortalMenu();
+        return portal || null;
+      }, 1800, 60);
+
+      if(!menu){
+        // Lukk evt. popover og prøv neste
+        document.dispatchEvent(new KeyboardEvent('keydown', {bubbles:true, key:'Escape'}));
+        document.dispatchEvent(new KeyboardEvent('keyup',   {bubbles:true, key:'Escape'}));
+        await sleep(80);
+        continue;
+      }
+
+      // 3) Klikk størrelsen (dette er ofte selve "add"-handlingen)
+      const picked = await pickSizeFromMenu(menu, sizeStr);
+      if(!picked){
+        document.dispatchEvent(new KeyboardEvent('keydown', {bubbles:true, key:'Escape'}));
+        document.dispatchEvent(new KeyboardEvent('keyup',   {bubbles:true, key:'Escape'}));
+        await sleep(80);
+        continue;
+      }
+
+      // 4) Vent på at en ny tile faktisk dukker opp
+      const ok = await waitFor(() => {
+        const after = countTilesOfSizeInDetails(detailsList || [], sizeStr);
+        return after > before ? true : null;
+      }, 4500, 120);
+
+      if(ok){
+        // Sørg for at virtualiserte tiles blir mountet før vi fortsetter
+        await ensureAllTilesMounted(scope || document);
+        return true;
+      }
     }
-
-    try{
-      combo.scrollIntoView({block:'center'});
-      combo.click();
-      await sleep(160);
-    }catch{}
-
-    const menu = await waitFor(()=>{
-      const m = document.querySelector('[role="listbox"], .MuiPopover-root, .MuiMenu-list, [role="presentation"]');
-      return m && vis(m) ? m : null;
-    }, 1200, 60);
-
-    if(!menu) continue;
-
-    const items = [...menu.querySelectorAll('[role="option"], li, button, div')].filter(vis);
-    const hit = items.find(it=>{
-      const t = cs(it.innerText||it.textContent||'');
-      return t.includes(sizeStr) || t.includes(cs(sizePretty));
-    });
-
-    if(!hit){
-      document.dispatchEvent(new KeyboardEvent('keydown', {bubbles:true, key:'Escape'}));
-      document.dispatchEvent(new KeyboardEvent('keyup',   {bubbles:true, key:'Escape'}));
-      await sleep(80);
-      continue;
-    }
-
-    hit.scrollIntoView({block:'center'});
-    hit.click();
-    await sleep(120);
-
-    c.btn.scrollIntoView({block:'center'});
-    c.btn.click();
-    await sleep(500);
-    return true;
   }
 
   return false;
 }
+
 
 /* ===== helper: rebuild detailsList after adds ===== */
 async function rebuildDetailsAndEntries(rowsForId){
@@ -1284,7 +1354,8 @@ async function runOnIds(ids){
               await ensureCampaignView();
               await waitForIdle();
 
-              const ok = await tryAddTileOfSize(x.size);
+              const ok = await tryAddTileOfSize(x.size, detailsList);
+
               if(!ok){
                 LOG(`   ! Klarte ikke å legge til ${x.size} (fant ikke UI/valget). Fortsetter uten å legge til mer for denne.`);
                 break;
