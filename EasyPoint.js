@@ -1143,172 +1143,114 @@ btnRun.onclick=()=>{
   runOnIds(ids)
 };
 
-/* ========= (BEST EFFORT) add extra tiles ========= */
+/* ========= (BEST EFFORT) add extra tiles (dropdown-menu) ========= */
 /**
- * NY implementasjon for din dropdown:
- * - Finn knappen som inneholder "Legg til valgfri materiell" (NO)
- *   eller "Add optional creative placeholder" (EN)
- * - Klikk, finn menyen (role=menu / dropdown---dropdown-menu---*)
- * - Klikk riktig menuitem som matcher f.eks. 580x500
+ * For din UI:
+ * - Knapp: "Legg til valgfri materiell"
+ * - Klikk åpner <div role="menu"> med <div role="menuitem">580x500</div>
+ * - Vi klikker direkte på menuitem (ingen combobox/select i dette UI-et)
  */
-function findAddOptionalButton(scope=d){
-  const buttons=[...scope.querySelectorAll('button')].filter(vis);
+
+function findAddOptionalButton(scope = document){
   const rx = /(legg\s*til\s*valgfri\s*materiell|add\s*optional\s*creative\s*placeholder)/i;
-  // 1) tekst-match
-  let btn = buttons.find(b=>rx.test((b.innerText||b.textContent||'').trim()));
-  if(btn) return btn;
 
-  // 2) fallback: plus-ikon path (samme som i HTML) + "Add size" i nærhet
-  const plusPathStart = 'M4 6H2v14'; // fra svg i knappen din
-  btn = buttons.find(b=>{
-    const p=b.querySelector('svg path');
-    const d0=p?.getAttribute?.('d')||'';
-    if(!d0.startsWith(plusPathStart)) return false;
-    const near = b.closest('div')?.innerText?.toLowerCase()||'';
-    return near.includes('add size') || near.includes('valgfri') || near.includes('optional');
-  });
-  return btn||null;
+  // 1) Finn den synlige MuiButton (inner-knappen)
+  const btn = [...scope.querySelectorAll('button')]
+    .filter(vis)
+    .find(b => rx.test((b.innerText || b.textContent || '').trim()));
+
+  if (btn) return btn;
+
+  // 2) fallback: finn dropdown wrapper med menu + add-ikon
+  const wrappers = [...scope.querySelectorAll('.dropdown---dropdown---1yvIZ, [class*="dropdown---dropdown---"]')].filter(vis);
+  for (const w of wrappers){
+    const t = (w.innerText || '').toLowerCase();
+    if (t.includes('legg til valgfri') || t.includes('optional creative') || t.includes('add size')) {
+      const b = w.querySelector('button');
+      if (b && vis(b)) return b;
+    }
+  }
+  return null;
 }
 
-function findOpenMenu(){
-  // i HTML: <div role="menu" class="dropdown---dropdown-menu---...">
-  const menus=[...document.querySelectorAll('[role="menu"], .dropdown---dropdown-menu---1fkH0')].filter(vis);
-  // ta den som faktisk inneholder "Add size" eller størrelsesitems
-  const m = menus.find(x=>{
-    const t=(x.innerText||'').toLowerCase();
-    return t.includes('add size') || /\b\d{2,4}x\d{2,4}\b/i.test(t);
-  });
-  return m || menus[0] || null;
+function findDropdownWrapperFromBtn(btn){
+  if (!btn) return null;
+  return btn.closest('.dropdown---dropdown---1yvIZ, [class*="dropdown---dropdown---"]') || btn.parentElement || null;
 }
 
-function findOptionalMaterialArea(scopeRoot){
-  const root = scopeRoot || document;
-  const needles = [
-    'valgfri materiell',
-    'optional material',
-    'optional creative',
-    'creative placeholder',
-    'legg til valgfri',
-    'add optional',
-    'add'
-  ];
+function isMenuOpen(wrapper){
+  const menu = wrapper?.querySelector?.('[role="menu"]');
+  if (!menu) return false;
+  const exp = wrapper.querySelector('[aria-expanded]')?.getAttribute('aria-expanded');
+  if (exp === 'true') return true;
+  return vis(menu) && (menu.children?.length > 0);
+}
 
-  const blocks = [...root.querySelectorAll('div,section,aside')]
-    .filter(el => vis(el));
+async function openMenu(wrapper){
+  if (!wrapper) return false;
 
-  for (const b of blocks){
-    const t = (b.innerText || '').toLowerCase();
-    if (needles.some(n => t.includes(n))) return b;
+  // toggle kan være en outer "dropdown-toggle" knapp (role="button")
+  const toggles = [...wrapper.querySelectorAll('button,[role="button"]')].filter(vis);
+  const toggle =
+    toggles.find(x => x.getAttribute?.('aria-haspopup') === 'true') ||
+    toggles.find(x => (x.className||'').includes('dropdown-toggle')) ||
+    toggles[0];
+
+  if (!toggle) return false;
+
+  // åpne hvis ikke åpen
+  if (!isMenuOpen(wrapper)) {
+    try { toggle.scrollIntoView({block:'center'}); } catch {}
+    toggle.click();
+    await sleep(120);
   }
 
-  // fallback: søk litt bredere (men fortsatt innen scope)
-  return root;
+  // vent på meny i wrapper
+  const menu = await waitFor(() => {
+    const m = wrapper.querySelector('[role="menu"]');
+    return (m && vis(m)) ? m : null;
+  }, 2000, 60);
+
+  return !!menu;
+}
+
+function findMenuItem(menu, sizeStr){
+  if (!menu) return null;
+  const target = cs(sizeStr); // "580x500"
+  const items = [...menu.querySelectorAll('[role="menuitem"], .dropdown---menu-item---1LjoL')]
+    .filter(vis);
+
+  // match både "580x500" og "580×500"
+  return items.find(it => {
+    const txt = cs(it.innerText || it.textContent || '');
+    return txt === target || txt.includes(target);
+  }) || null;
 }
 
 async function tryAddTileOfSize(sizeStr, scopeRoot){
-  const sizePretty = sizeStr.replace('x','×');
+  const root = scopeRoot || document;
 
-  // Viktig: prøv i scope først (dvs. den linja du jobber på)
-  const root = findOptionalMaterialArea(scopeRoot);
+  // Finn knappen i scope (den linja du jobber på)
+  const addBtn = findAddOptionalButton(root) || findAddOptionalButton(document);
+  if (!addBtn) return false;
 
-  // Finn "Legg til valgfri materiell" / "Add optional creative placeholder"
-  const addBtns = [...root.querySelectorAll('button')]
-    .filter(vis)
-    .filter(b => {
-      const txt = (b.innerText || '').toLowerCase().trim();
-      return (
-        txt.includes('legg til valgfri') ||
-        txt.includes('valgfri materiell') ||
-        txt.includes('add optional') ||
-        txt.includes('optional creative') ||
-        txt.includes('creative placeholder') ||
-        /^add$/.test(txt) ||
-        /^legg\s*til$/.test(txt)
-      );
-    });
+  const wrapper = findDropdownWrapperFromBtn(addBtn) || root;
 
-  // Kandidater: knappen + nærmeste “container” rundt
-  const candidates = addBtns.map(btn => ({
-    btn,
-    wrap: btn.closest('div') || root
-  }));
+  // Åpne meny
+  const opened = await openMenu(wrapper);
+  if (!opened) return false;
 
-  for (const c of candidates){
-    // Finn dropdown/combobox i samme "område" som knappen
-    const combo =
-      [...c.wrap.querySelectorAll('[role="combobox"]')].filter(vis)[0] ||
-      [...c.wrap.querySelectorAll('select')].filter(vis)[0] ||
-      [...c.wrap.querySelectorAll('input')].filter(vis)[0];
+  // Finn meny + menuitem
+  const menu = wrapper.querySelector('[role="menu"]');
+  const item = findMenuItem(menu, sizeStr);
+  if (!item) return false;
 
-    if(!combo) continue;
-
-    // --- Native SELECT ---
-    if(combo.tagName === 'SELECT'){
-      const opts = [...combo.querySelectorAll('option')];
-      const hit = opts.find(o => {
-        const t = cs(o.textContent || '');
-        const v = cs(o.value || '');
-        return t === sizeStr || v === sizeStr || t.includes(sizeStr);
-      });
-      if(!hit) continue;
-
-      combo.value = hit.value;
-      combo.dispatchEvent(new Event('input',{bubbles:true}));
-      combo.dispatchEvent(new Event('change',{bubbles:true}));
-      await sleep(80);
-
-      c.btn.click();
-      await sleep(450);
-      return true;
-    }
-
-    // --- MUI combobox ---
-    try{
-      combo.scrollIntoView({block:'center'});
-      combo.click();
-      await sleep(160);
-    }catch{}
-
-    // Menyen (listbox) er ofte rendret i portal (body), så denne må være global:
-    const menu = await waitFor(() => {
-      const m =
-        document.querySelector('[role="listbox"]') ||
-        document.querySelector('.MuiPopover-root [role="listbox"]') ||
-        document.querySelector('.MuiMenu-list') ||
-        document.querySelector('[role="presentation"] [role="listbox"]');
-      return (m && vis(m)) ? m : null;
-    }, 1400, 60);
-
-    if(!menu) continue;
-
-    const items = [...menu.querySelectorAll('[role="option"], li, button, div')]
-      .filter(vis);
-
-    const hit = items.find(it => {
-      const t = cs(it.innerText || it.textContent || '');
-      return t.includes(sizeStr) || t.includes(cs(sizePretty));
-    });
-
-    if(!hit){
-      // lukk meny og prøv neste kandidat
-      document.dispatchEvent(new KeyboardEvent('keydown', {bubbles:true, key:'Escape'}));
-      document.dispatchEvent(new KeyboardEvent('keyup',   {bubbles:true, key:'Escape'}));
-      await sleep(80);
-      continue;
-    }
-
-    hit.scrollIntoView({block:'center'});
-    hit.click();
-    await sleep(120);
-
-    c.btn.scrollIntoView({block:'center'});
-    c.btn.click();
-    await sleep(550);
-    return true;
-  }
-
-  return false;
+  try { item.scrollIntoView({block:'center'}); } catch {}
+  item.click();
+  await sleep(250);
+  return true;
 }
+
 
 
 /* ===== helper: rebuild detailsList after adds ===== */
