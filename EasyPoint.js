@@ -1104,7 +1104,7 @@ let overwriteMode=G(OVERWRITE_KEY,'empty');
 const owWrap=d.createElement('label');
 owWrap.style.cssText='display:flex;align-items:center;gap:6px;margin-left:8px;font-size:12px;opacity:.95';
 const owCb=d.createElement('input'); owCb.type='checkbox'; owCb.checked=(overwriteMode==='all');
-const owTxt=d.createElement('span'); owTxt.textContent='Erstatt materiell hvis det finnes allerede';
+const owTxt=d.createElement('span'); owTxt.textContent='Erstatt eksisterende materiell';
 owWrap.append(owCb,owTxt);
 body.insertBefore(owWrap,drop);
 
@@ -1761,3 +1761,4 @@ w.addEventListener('keydown',e=>{ if(e.altKey && e.key.toLowerCase()==='a'){ e.p
 })();
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
+
