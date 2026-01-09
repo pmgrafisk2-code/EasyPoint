@@ -794,7 +794,7 @@ const addCb = document.createElement('input');
 addCb.type='checkbox';
 addCb.checked = addExtraSizes;
 const addTxt = document.createElement('span');
-addTxt.textContent = 'Tillat å legge til størrelser (hvis flere scripts enn plasser)';
+addTxt.textContent = 'Tillat å legge til størrelser';
 addWrap.append(addCb, addTxt);
 body.insertBefore(addWrap, drop);
 
@@ -1548,6 +1548,19 @@ async function rebuildDetailsAndEntries(rowsForId){
     detailsList,
     entries: [...uniq.values()]
   };
+}
+
+
+async function getEditorValueStable(editor, tries = 8, step = 120){
+  let last = null;
+  for (let i = 0; i < tries; i++){
+    const v = getEditorValue(editor);
+    if (v && v.trim()) return v;      // har innhold => ferdig
+    if (v === last && i >= 2) return v; // stabilt tomt et par runder
+    last = v;
+    await sleep(step);
+  }
+  return getEditorValue(editor);
 }
 
 
