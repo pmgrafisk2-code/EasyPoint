@@ -1522,11 +1522,13 @@ async function runOnIds(ids){
           const [sz, vr] = k.split('|');
 const tilesCount = countTilesForSizeVariant(detailsList, sz, vr || null);
 
-          const need = Math.max(0, scriptsCount - tilesCount);
-          if(need>0){
-            const [sz]=k.split('|');
-            needList.push({key:k, size:sz, need});
-          }
+          // AdPoint blokkerer som regel duplikat-størrelser på samme linje.
+// Derfor: vi legger kun til hvis størrelsen mangler helt (tilesCount === 0).
+if (tilesCount === 0 && scriptsCount > 0) {
+  const [sz] = k.split('|');
+  needList.push({ key:k, size:sz, need: 1 }); // legg til én plass
+}
+
         }
 
         if(needList.length){
