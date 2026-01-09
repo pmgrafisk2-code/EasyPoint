@@ -10,6 +10,22 @@ async function waitFor(fn,ms=6000,step=100){const t=Date.now();let v;while(Date.
 function parseSizeVariant(s){const str=String(s||'');const m=str.match(/(\d{2,4})\s*[x×]\s*(\d{2,4})/i);if(!m) return{size:'',variant:null};const size=`${m[1]}x${m[2]}`;const tail=str.slice(m.index+m[0].length);const v=(tail.match(/desktop|mobil|mobile/i)||[''])[0].toLowerCase();const variant=v.includes('desk')?'desktop':(v?'mobil':null);return{size,variant}}
 function prettyCounts(entries){const counts=new Map();for(const e of entries){const key=e.size+(e.variant?`/${e.variant[0]}`:'');counts.set(key,(counts.get(key)||0)+1)}return[...counts.entries()].map(([k,n])=>n>1?`${k}×${n}`:k).join(', ')}
 
+/* ========= add-size helpers (MUST exist early) ========= */
+function getAddOptionalBtn(scope){
+  const root = scope || document;
+  const btn = Array.from(root.querySelectorAll('button, [role="button"]'))
+    .filter(vis)
+    .find(b => /legg til valgfri materiell/i.test((b.innerText || b.textContent || '').trim()));
+  return btn || null;
+}
+
+function countTilesInCollapse(collapseRow){
+  if(!collapseRow) return 0;
+  return collapseRow.querySelectorAll('.set-creativeTile, .set-creativeTile__selected').length;
+}
+
+
+
 /* ========= version keys & line-id ========= */
 function versionKey(str){const s=String(str||'').toLowerCase();const mIx=s.match(/\bix[-_][0-9a-z-]+\b/i);if(mIx) return mIx[0];const mV=s.match(/\b(?:ver|v)[\s._-]?(\d{1,3})\b/i);if(mV) return `v${mV[1]}`;return null}
 function extractLineIds(str){
@@ -1208,12 +1224,12 @@ async function ensureLineExpanded(dataRow){
     expBtn.click();
   }
 
-  // Vent på at collapse-raden kommer
   collapseRow = await waitFor(() => {
-    const cr = getCollapseRowForDataRow(dataRow);
-    if (cr && cr.querySelector('.set-matSpecCreativeSection')) return cr;
-    return null;
-  }, 3000, 80);
+  const cr = getCollapseRowForDataRow(dataRow);
+  if (cr && cr.querySelector('.set-matSpecCreativeSection, .set-creativeSectionContainer, .set-creativeContainer')) return cr;
+  return null;
+}, 3000, 80);
+
 
   return collapseRow;
 }
@@ -1227,16 +1243,7 @@ function isVisibleMenu(el){
   return r.width > 0 && r.height > 0;
 }
 
-function getAddOptionalBtn(scope){
-  const root = scope || document;
 
-  // Typisk knappetekst
-  const btn = Array.from(root.querySelectorAll('button, [role="button"]'))
-    .filter(vis)
-    .find(b => /legg til valgfri materiell/i.test((b.innerText || b.textContent || '').trim()));
-
-  return btn || null;
-}
 
 function countTilesInCollapse(collapseRow){
   if(!collapseRow) return 0;
