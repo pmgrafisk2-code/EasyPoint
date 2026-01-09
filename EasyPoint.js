@@ -1174,6 +1174,25 @@ function getExpandBtnForDataRow(dataRow){
   return null;
 }
 
+function getCollapseRowForDataRow(dataRow){
+  if(!dataRow) return null;
+
+  // Vanligvis ligger collapse-raden rett under dataRow
+  let sib = dataRow.nextElementSibling;
+
+  // Skip evt. "mellomrader" til vi finner en rad med creative section
+  for (let i = 0; i < 6 && sib; i++){
+    if (sib.querySelector?.('.set-matSpecCreativeSection, .set-creativeSectionContainer, .set-creativeContainer')){
+      return sib;
+    }
+    sib = sib.nextElementSibling;
+  }
+
+  // Fallback: prøv bare første sibling hvis den finnes
+  return dataRow.nextElementSibling || null;
+}
+
+
 async function ensureLineExpanded(dataRow){
   // Hvis collapse-raden allerede finnes og har creative section, er vi good
   let collapseRow = getCollapseRowForDataRow(dataRow);
@@ -1397,16 +1416,19 @@ const tilesCount = countTilesForSizeVariant(detailsList, sz, vr || null);
   await waitForIdle();
 
   // bruk EN av radene for denne id-en (vanligvis bare 1)
-  const dataRow = rowsForId[0];
-  if (!dataRow) { LOG(`   ! Fant ikke dataRow for ${id}`); break; }
+  let res = null;
 
-  LOG(`   · prøver å legge til ${x.size} (linje ${id})`);
-  const res = await addSizeScopedToLine(dataRow, x.size);
+for (const dr of rowsForId){
+  if(stopping) break;
+  res = await addSizeScopedToLine(dr, x.size);
+  if (res?.ok) break;
+}
 
-  if (!res.ok) {
-    LOG(`   ! Klarte ikke å legge til ${x.size}: ${res.reason}`);
-    break;
-  }
+if (!res?.ok){
+  LOG(`   ! Klarte ikke å legge til ${x.size}: ${res?.reason || 'ukjent feil'}`);
+  break;
+}
+
 
   LOG(`   + La til størrelse: ${x.size}`);
 
