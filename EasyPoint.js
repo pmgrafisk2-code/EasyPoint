@@ -738,7 +738,7 @@ reuseCb.onchange = () => {
 // Legg til ekstra størrelser
 const ADD_KEY = 'ap3p_add_extra_sizes';
 let addExtraSizes = !!G(ADD_KEY, false);
-
+/*
 const addWrap = document.createElement('label');
 addWrap.style.cssText='display:flex;align-items:center;gap:6px;margin-left:8px;font-size:12px;opacity:.95';
 const addCb = document.createElement('input');
@@ -747,7 +747,7 @@ addCb.checked = addExtraSizes;
 const addTxt = document.createElement('span');
 addTxt.textContent = 'Tillat å legge til størrelser (hvis flere scripts enn plasser)';
 addWrap.append(addCb, addTxt);
-body.insertBefore(addWrap, drop);
+body.insertBefore(addWrap, drop); */
 
 // Erstatt-modus: alle vs kun tomme
 const OVERWRITE_KEY = 'ap3p_overwrite_mode'; // 'all' | 'empty'
@@ -1522,11 +1522,10 @@ async function runOnIds(ids){
           const [sz, vr] = k.split('|');
 const tilesCount = countTilesForSizeVariant(detailsList, sz, vr || null);
 
-          // AdPoint blokkerer som regel duplikat-størrelser på samme linje.
-// Derfor: vi legger kun til hvis størrelsen mangler helt (tilesCount === 0).
+          // Samme regel som i run: legg kun til hvis størrelsen mangler helt.
+// (AdPoint blokkerer ofte duplikat-størrelser per linje.)
 if (tilesCount === 0 && scriptsCount > 0) {
-  const [sz] = k.split('|');
-  needList.push({ key:k, size:sz, need: 1 }); // legg til én plass
+  adds.push({ size: sv.size, variant: sv.variant || null, need: 1 });
 }
 
         }
