@@ -72,10 +72,12 @@ function extractLineIds(str){
 // Ensures all creative tiles are actually mounted (virtualized list)
 async function ensureAllTilesMounted(root = d){
   const scroller =
-    root.querySelector('.set-creativeSectionContainer') ||
-    root.querySelector('.set-creativeContainer') ||
-    d.querySelector('.set-creativeSectionContainer') ||
-    d.scrollingElement;
+  root.querySelector('.set-creativeSectionContainer') ||
+  root.querySelector('.set-creativeContainer') ||
+  root.querySelector('[class*="creativeSectionContainer"]') ||
+  root.querySelector('[class*="creativeContainer"]') ||
+  d.scrollingElement;
+
 
   if (!scroller) return;
 
@@ -374,17 +376,23 @@ function normalizeTagForCompare(s){
 }
 
 
-async function getEditorValueStable(editor, tries = 8, step = 120){
-  let last = null;
-  for (let i = 0; i < tries; i++){
-    const v = getEditorValue(editor);
-    if (v && v.trim()) return v;      // har innhold => ferdig
-    if (v === last && i >= 2) return v; // stabilt tomt et par runder
-    last = v;
-    await sleep(step);
-  }
-  return getEditorValue(editor);
+
+function panelHasSize(size){
+  const want = cs(size);
+  const panel = document.querySelector('#InfoPanelContainer') || document;
+  const txt = cs(panel.innerText || '');
+  return txt.includes(want);
 }
+
+async function ensurePanelOnSize(size, timeout=5000){
+  await waitForIdle(12000);
+  // Vent til InfoPanel-teksten inneholder riktig størrelse
+  const ok = await waitFor(() => panelHasSize(size), timeout, 80);
+  // liten buffer så CodeMirror rekker å oppdatere
+  await sleep(120);
+  return !!ok;
+}
+
 
 
 function getEditorValue(editor){
@@ -786,7 +794,7 @@ const addCb = document.createElement('input');
 addCb.type='checkbox';
 addCb.checked = addExtraSizes;
 const addTxt = document.createElement('span');
-addTxt.textContent = 'Tillat å legge til størrelser (hvis flere scripts enn plasser)';
+addTxt.textContent = 'Tillat å legge til størrelser';
 addWrap.append(addCb, addTxt);
 body.insertBefore(addWrap, drop);
 
@@ -1391,32 +1399,37 @@ async function addSizeScopedToLine(dataRow, sizeText){
   await sleep(80);
   doPointerClick(toggleBtn);
 
-  // 2) finn menyen LOKALT i samme dropdown (ikke portal)
-  let menu = await waitFor(() => {
-    if (!dropdownRoot) return null;
-    const m = dropdownRoot.querySelector('div[role="menu"]');
-    if (!m) return null;
-    // sjekk at den faktisk er "åpen"
-    const expanded = toggleBtn.getAttribute('aria-expanded');
-    if (expanded === 'false') return null;
-    return m;
-  }, 2500, 60);
+  // 2) finn menyen via PORTAL (MUI legger ofte menu i document.body)
+let menu = await waitFor(() => {
+  const cands = getPopupCandidates(document).filter(isVisiblePopup);
+  const picked = pickNearestTo(toggleBtn, cands);
+  if (!picked) return null;
 
-  // fallback: klikk igjen
-  if (!menu){
-    await sleep(120);
-    doPointerClick(toggleBtn);
-    menu = await waitFor(() => {
-      if (!dropdownRoot) return null;
-      const m = dropdownRoot.querySelector('div[role="menu"]');
-      if (!m) return null;
-      const expanded = toggleBtn.getAttribute('aria-expanded');
-      if (expanded === 'false') return null;
-      return m;
-    }, 2500, 60);
-  }
+  // vi vil ha containeren som inneholder menuitems
+  const roleMenu = picked.matches?.('[role="menu"],[role="listbox"]')
+    ? picked
+    : picked.querySelector?.('[role="menu"],[role="listbox"]');
 
-  if (!menu) return { ok:false, reason:"Meny dukket ikke opp (aria-expanded ble aldri true)" };
+  return roleMenu || picked;
+}, 3500, 60);
+
+// fallback: klikk igjen om den ikke kom
+if(!menu){
+  await sleep(120);
+  doPointerClick(toggleBtn);
+  menu = await waitFor(() => {
+    const cands = getPopupCandidates(document).filter(isVisiblePopup);
+    const picked = pickNearestTo(toggleBtn, cands);
+    if (!picked) return null;
+    const roleMenu = picked.matches?.('[role="menu"],[role="listbox"]')
+      ? picked
+      : picked.querySelector?.('[role="menu"],[role="listbox"]');
+    return roleMenu || picked;
+  }, 3500, 60);
+}
+
+if (!menu) return { ok:false, reason:"Meny dukket ikke opp (portal popup ikke funnet)" };
+
 
   const want = normTxt(sizeText);
 
@@ -1443,6 +1456,9 @@ async function addSizeScopedToLine(dataRow, sizeText){
   }
 
   doPointerClick(hit.el);
+  await waitForIdle(12000);
+await sleep(250);
+
 
   // 3) verifiser at det faktisk kom en NY tile for den størrelsen (eller total økte)
   const ok = await waitFor(() => {
@@ -1712,6 +1728,9 @@ for (const det of detailsList) {
           await waitForIdle();
           await selectTile(tiles[i]);
           await ensurePanelSwitchedToTile(tiles[i], 3500);
+
+          await ensurePanelOnSize(entry.size, 6000);
+
 
 
           const editor = await open3PTab();
