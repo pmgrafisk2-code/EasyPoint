@@ -31,6 +31,32 @@ function countTilesInCollapse(collapseRow){
 }
 
 
+async function ensurePanelSwitchedToTile(tile, timeout=3000){
+  if(!tile) return false;
+
+  // Vent til DOM mener tile er selected
+  await waitFor(() => isTileSelected(tile), timeout, 60);
+
+  // Vent litt ekstra så InfoPanel rekker å oppdatere
+  await sleep(120);
+  await waitForIdle(8000);
+
+  // I praksis: vent til "nå-valgt tile" i DOM faktisk er denne
+  const ok = await waitFor(() => {
+    const sel =
+      document.querySelector('.set-creativeTile__selected') ||
+      document.querySelector('.set-creativeTile[aria-selected="true"]') ||
+      document.querySelector('[aria-selected="true"] .set-creativeTile');
+
+    return sel && (sel === tile || sel.contains(tile) || tile.contains(sel));
+  }, timeout, 60);
+
+  // liten buffer etter switch
+  await sleep(120);
+  return !!ok;
+}
+
+
 
 /* ========= version keys & line-id ========= */
 function versionKey(str){const s=String(str||'').toLowerCase();const mIx=s.match(/\bix[-_][0-9a-z-]+\b/i);if(mIx) return mIx[0];const mV=s.match(/\b(?:ver|v)[\s._-]?(\d{1,3})\b/i);if(mV) return `v${mV[1]}`;return null}
@@ -760,7 +786,7 @@ const addCb = document.createElement('input');
 addCb.type='checkbox';
 addCb.checked = addExtraSizes;
 const addTxt = document.createElement('span');
-addTxt.textContent = 'Tillat å legge til størrelser';
+addTxt.textContent = 'Tillat å legge til størrelser (hvis flere scripts enn plasser)';
 addWrap.append(addCb, addTxt);
 body.insertBefore(addWrap, drop);
 
@@ -1590,9 +1616,16 @@ if (!res?.ok){
 
   LOG(`   + La til størrelse: ${x.size}`);
 
-  await sleep(350);
-  // Rebuild etter add slik at scripts kan matches på de nye tilesene
-  ({detailsList, entries} = await rebuildDetailsAndEntries(rowsForId));
+await waitForIdle(12000);
+await sleep(700);
+
+// sørg for at nye tiles blir mounta i denne collapse-seksjonen før rebuild
+for (const det of detailsList) {
+  await ensureAllTilesMounted(det);
+}
+
+({detailsList, entries} = await rebuildDetailsAndEntries(rowsForId));
+
 }
 
           }
@@ -1678,14 +1711,24 @@ if (!res?.ok){
           await ensureCampaignView();
           await waitForIdle();
           await selectTile(tiles[i]);
+          await ensurePanelSwitchedToTile(tiles[i], 3500);
+
 
           const editor = await open3PTab();
           if (!editor) { LOG('   ! Fant ikke 3rd-party editor'); stats.err++; continue; }
 
-          if (overwriteMode === 'empty') {
-  const current = await getEditorValueStable(editor, 8, 120);
+         if (overwriteMode === 'empty') {
+  let current = getEditorValue(editor);
+
+  // hvis vi nettopp har byttet tile, men editor er treg: gi den et lite "retry"
+  if (!isEmpty3PValue(current)) {
+    await sleep(180);
+    current = getEditorValue(editor);
+  }
+
   if (!isEmpty3PValue(current)) { skipped++; continue; }
 }
+
 
 
           const tagStr = (typeof payload === 'string') ? payload : (payload?.tag || '');
@@ -1781,4 +1824,3 @@ async function waitForIdle(timeout=12000){
 })();
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
-
