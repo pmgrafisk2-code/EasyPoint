@@ -351,14 +351,19 @@ async function pasteWithVerify(editor, value, tries = 2){
 async function saveWithRetry(editor, tries = 2){
   for (let i = 0; i <= tries; i++){
     const ok = await clickSaveOrReprocess(editor);
+    if (!ok) {
+      await sleep(250);
+      continue;
+    }
+
     await waitForIdle(15000);
-    if (!ok) return false;
     await ensureCampaignView();
     await waitForIdle(8000);
     return true;
   }
   return false;
 }
+
 async function checkpoint(label=''){
   await ensureCampaignView();
   await waitForIdle(15000);
@@ -1151,197 +1156,86 @@ btnRun.onclick=()=>{
  * - Vi klikker direkte på menuitem (ingen combobox/select i dette UI-et)
  */
 
-function findAddOptionalButton(scope = document){
-  const rx = /(legg\s*til\s*valgfri\s*materiell|add\s*optional\s*creative\s*placeholder)/i;
+// ---- add size (LINJE-SCOPED) ----
+// Klikker "Legg til valgfri materiell" i riktig linje,
+// finner riktig "portal"-meny som dukker opp etter klikk,
+// klikker ønsket størrelse INNI den menyen, og verifiserer at linja fikk +1 tile.
 
-  // 1) Finn den synlige MuiButton (inner-knappen)
-  const btn = [...scope.querySelectorAll('button')]
-    .filter(vis)
-    .find(b => rx.test((b.innerText || b.textContent || '').trim()));
+function isVisibleMenu(el){
+  if(!el) return false;
+  const cs = getComputedStyle(el);
+  if (cs.display === "none" || cs.visibility === "hidden") return false;
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0;
+}
 
-  if (btn) return btn;
-
-  // 2) fallback: finn dropdown wrapper med menu + add-ikon
-  const wrappers = [...scope.querySelectorAll('.dropdown---dropdown---1yvIZ, [class*="dropdown---dropdown---"]')].filter(vis);
-  for (const w of wrappers){
-    const t = (w.innerText || '').toLowerCase();
-    if (t.includes('legg til valgfri') || t.includes('optional creative') || t.includes('add size')) {
-      const b = w.querySelector('button');
-      if (b && vis(b)) return b;
-    }
+function getCollapseRowForDataRow(dataRow){
+  let n = dataRow?.nextElementSibling;
+  while (n){
+    if (n.querySelector?.(".set-matSpecCreativeSection")) return n;
+    if (n.classList?.contains("set-matSpecDataRow")) break;
+    n = n.nextElementSibling;
   }
   return null;
 }
 
-function findDropdownWrapperFromBtn(btn){
-  if (!btn) return null;
-  return btn.closest('.dropdown---dropdown---1yvIZ, [class*="dropdown---dropdown---"]') || btn.parentElement || null;
+function countTilesInCollapse(collapseRow){
+  return collapseRow
+    ? collapseRow.querySelectorAll(".set-creativeTile, .set-creativeTile__selected").length
+    : 0;
 }
 
-function isMenuOpen(wrapper){
-  const menu = wrapper?.querySelector?.('[role="menu"]');
-  if (!menu) return false;
-  const exp = wrapper.querySelector('[aria-expanded]')?.getAttribute('aria-expanded');
-  if (exp === 'true') return true;
-  return vis(menu) && (menu.children?.length > 0);
+function getAddOptionalBtn(collapseRow){
+  if(!collapseRow) return null;
+  const btns = Array.from(collapseRow.querySelectorAll("button")).filter(vis);
+  return btns.find(b => (b.textContent || "").includes("Legg til valgfri materiell")) || null;
 }
 
-async function openMenu(wrapper){
-  if (!wrapper) return false;
+async function addSizeScopedToLine(dataRow, sizeText){
+  const collapseRow = getCollapseRowForDataRow(dataRow);
+  if (!collapseRow) return { ok:false, reason:"Fant ikke collapse-rad for linja" };
 
-  // toggle kan være en outer "dropdown-toggle" knapp (role="button")
-  const toggles = [...wrapper.querySelectorAll('button,[role="button"]')].filter(vis);
-  const toggle =
-    toggles.find(x => x.getAttribute?.('aria-haspopup') === 'true') ||
-    toggles.find(x => (x.className||'').includes('dropdown-toggle')) ||
-    toggles[0];
+  const btn = getAddOptionalBtn(collapseRow);
+  if (!btn) return { ok:false, reason:"Fant ikke 'Legg til valgfri materiell'-knapp i linja" };
 
-  if (!toggle) return false;
+  const tilesBefore = countTilesInCollapse(collapseRow);
 
-  // åpne hvis ikke åpen
-  if (!isMenuOpen(wrapper)) {
-    try { toggle.scrollIntoView({block:'center'}); } catch {}
-    toggle.click();
-    await sleep(120);
-  }
+  // Snapshot av eksisterende menyer (MUI-portal)
+  const menusBefore = Array.from(document.querySelectorAll('div[role="menu"].dropdown---dropdown-menu---1fkH0'));
 
-  // vent på meny i wrapper
+  // Åpne meny for DENNE linja
+  btn.scrollIntoView({ block:'center' });
+  btn.click();
+
+  // Finn menyen som dukker opp etter klikk (ny, ellers siste synlige)
   const menu = await waitFor(() => {
-    const m = wrapper.querySelector('[role="menu"]');
-    return (m && vis(m)) ? m : null;
-  }, 2000, 60);
-
-  return !!menu;
-}
-
-function findMenuItem(menu, sizeStr){
-  if (!menu) return null;
-  const target = cs(sizeStr); // "580x500"
-  const items = [...menu.querySelectorAll('[role="menuitem"], .dropdown---menu-item---1LjoL')]
-    .filter(vis);
-
-  // match både "580x500" og "580×500"
-  return items.find(it => {
-    const txt = cs(it.innerText || it.textContent || '');
-    return txt === target || txt.includes(target);
-  }) || null;
-}
-
-async function tryAddTileOfSize(sizeStr, scopeRoot){
-  const root = scopeRoot || document;
-
-  // Finn knappen i scope (den linja du jobber på)
-  const addBtn = findAddOptionalButton(root) || findAddOptionalButton(document);
-  if (!addBtn) return false;
-
-  const wrapper = findDropdownWrapperFromBtn(addBtn) || root;
-
-  // Åpne meny
-  const opened = await openMenu(wrapper);
-  if (!opened) return false;
-
-  // Finn meny + menuitem
-  const menu = wrapper.querySelector('[role="menu"]');
-  const item = findMenuItem(menu, sizeStr);
-  if (!item) return false;
-
-  try { item.scrollIntoView({block:'center'}); } catch {}
-  item.click();
-  await sleep(250);
-  return true;
-}
-
-
-
-/* ===== helper: rebuild detailsList after adds ===== */
-async function rebuildDetailsAndEntries(rowsForId){
-  const detailsList=[];
-  let liveEntries=[];
-  for(const r of rowsForId){
-    if(stopping) break;
-    await ensureCampaignView();
-    const det = await expandRow(r);
-    await waitForIdle();
-    await ensureAllTilesMounted(det || d);
-    await sleep(80);
-    if(det) detailsList.push(det);
-    liveEntries = liveEntries.concat(sizesFromExpanded(det));
-  }
-  const uniq=new Map();
-  for(const e of liveEntries){
-    const k=`${e.size}|${e.variant||''}|${e.side||''}`;
-    if(!uniq.has(k)) uniq.set(k,{size:e.size,variant:e.variant,side:e.side})
-  }
-  return {detailsList, entries:[...uniq.values()]};
-}
-
-async function addOptionalMaterialSizeForLine(lineRootEl, sizeStr){
-  const norm = s => String(s||"").replace(/\s+/g,"").toLowerCase();
-
-  // 1) finn dropdown i linja
-  const dropdowns = Array.from(lineRootEl.querySelectorAll('.dropdown---dropdown---1yvIZ,[class*="dropdown---dropdown---"]'))
-    .filter(vis);
-
-  const dd = dropdowns.find(el => /legg til valgfri materiell/i.test(el.innerText || ""));
-  const root = dd || lineRootEl;
-
-  // 2) finn toggle-knappen i denne dropdownen
-  const toggleBtn =
-    Array.from(root.querySelectorAll('button[aria-haspopup="true"],button'))
-      .filter(vis)
-      .find(b => /legg til valgfri materiell/i.test(b.innerText || b.textContent || ""));
-
-  if (!toggleBtn) return { ok:false, why:"Fant ikke toggle-knapp i linja" };
-
-  // 3) åpne dropdown
-  toggleBtn.scrollIntoView({ block:"center", inline:"center" });
-  toggleBtn.dispatchEvent(new MouseEvent("pointerdown", { bubbles:true, cancelable:true, view:window }));
-  toggleBtn.dispatchEvent(new MouseEvent("mousedown",  { bubbles:true, cancelable:true, view:window }));
-  toggleBtn.dispatchEvent(new MouseEvent("mouseup",    { bubbles:true, cancelable:true, view:window }));
-  toggleBtn.click();
-
-  // 4) finn riktig menu: den synlige som er nærmest knappen vi klikket
-  const menu = await waitFor(() => {
-    const btnRect = toggleBtn.getBoundingClientRect();
-    const menus = Array.from(document.querySelectorAll('[role="menu"]')).filter(vis);
-
-    if (!menus.length) return null;
-
-    // velg nærmeste menu til knappen (MUI popper = fysisk nær)
-    let best = null;
-    let bestDist = Infinity;
-
-    for (const m of menus){
-      const r = m.getBoundingClientRect();
-      const cx = r.left + r.width/2;
-      const cy = r.top  + r.height/2;
-      const bx = btnRect.left + btnRect.width/2;
-      const by = btnRect.top  + btnRect.height/2;
-      const dist = Math.hypot(cx - bx, cy - by);
-      if (dist < bestDist){
-        bestDist = dist;
-        best = m;
-      }
-    }
-    return best;
+    const menusNow = Array.from(document.querySelectorAll('div[role="menu"].dropdown---dropdown-menu---1fkH0'));
+    const newOnes  = menusNow.filter(m => !menusBefore.includes(m));
+    const cand     = (newOnes.length ? newOnes : menusNow).filter(isVisibleMenu);
+    return cand.length ? cand[cand.length - 1] : null;
   }, 2500, 60);
 
-  if (!menu) return { ok:false, why:"Dropdown-meny dukket ikke opp" };
+  if (!menu) return { ok:false, reason:"Meny dukket ikke opp" };
 
-  // 5) finn og klikk ønsket størrelse I DEN MENYEN
-  const wanted = Array.from(menu.querySelectorAll('[role="menuitem"]'))
-    .find(mi => norm(mi.innerText || mi.textContent || "") === norm(sizeStr));
+  // Finn riktig item INNI den menyen
+  const wanted = Array.from(menu.querySelectorAll('[role="menuitem"], .dropdown---menu-item---1LjoL'))
+    .find(el => (el.textContent || "").trim() === String(sizeText).trim());
 
-  if (!wanted) return { ok:false, why:`Fant ikke størrelse-valg i menyen: ${sizeStr}` };
+  if (!wanted) {
+    document.body.click();
+    return { ok:false, reason:`Fant ikke størrelse '${sizeText}' i menyen` };
+  }
 
-  wanted.scrollIntoView({ block:"center" });
-  wanted.dispatchEvent(new MouseEvent("mousedown", { bubbles:true, cancelable:true, view:window }));
-  wanted.dispatchEvent(new MouseEvent("mouseup",   { bubbles:true, cancelable:true, view:window }));
+  wanted.scrollIntoView({ block:'center' });
   wanted.click();
 
-  await sleep(450);
+  // Verifiser at akkurat DENNE linja fikk en ny tile
+  const ok = await waitFor(() => countTilesInCollapse(collapseRow) === tilesBefore + 1, 3000, 80);
+  if (!ok) return { ok:false, reason:"Klikk utført, men ingen ny tile dukket opp i denne linja" };
+
   return { ok:true };
 }
+
 
 
 function countTilesForSizeVariant(detailsList, size, variant){
@@ -1359,6 +1253,46 @@ function countTilesForSizeVariant(detailsList, size, variant){
     }
   }
   return n;
+}
+
+async function rebuildDetailsAndEntries(rowsForId){
+  // Expand all rows for this ID and collect all "collapse rows" (details)
+  const detailsList = [];
+
+  for (const r of (rowsForId || [])) {
+    if (!r) continue;
+
+    await ensureCampaignView();
+    await waitForIdle();
+
+    const det = await expandRow(r);
+    if (det) {
+      detailsList.push(det);
+      await waitForIdle();
+      await ensureAllTilesMounted(det);
+      await sleep(80);
+    }
+  }
+
+  // Collect entries (size/variant/side) from all details
+  const all = [];
+  for (const det of detailsList) {
+    try {
+      all.push(...sizesFromExpanded(det));
+    } catch {}
+  }
+
+  // De-dupe: keep only unique size+variant+side combos (but still preserve a representative tile)
+  const uniq = new Map();
+  for (const e of all) {
+    const k = `${e.size}|${e.variant || ''}|${e.side || ''}`;
+    if (!uniq.has(k)) uniq.set(k, { size: e.size, variant: e.variant || null, side: e.side || null, tile: e.tile || null });
+  }
+
+  return {
+    detailsList,
+    entries: [...uniq.values()]
+  };
 }
 
 
@@ -1423,66 +1357,31 @@ async function runOnIds(ids){
           LOG(`   · Legg-til plan (${id}): ` + needList.map(x=>`${x.size}×${x.need}`).join(', '));
           for(const x of needList){
             if(stopping) break;
-            for(let n=0;n<x.need;n++){
-              if(stopping) break;
-              await ensureCampaignView();
-              await waitForIdle();
-LOG(`   · prøver å legge til ${x.size} (scope for linje ${id})`);
+            for (let n = 0; n < x.need; n++){
+  if (stopping) break;
 
-const variant = null; // du bruker ikke variant i needList nå (kun size)
-const beforeCount = countTilesForSizeVariant(detailsList, x.size, variant);
+  await ensureCampaignView();
+  await waitForIdle();
 
-let ok = false;
-let why = '';
+  // bruk EN av radene for denne id-en (vanligvis bare 1)
+  const dataRow = rowsForId[0];
+  if (!dataRow) { LOG(`   ! Fant ikke dataRow for ${id}`); break; }
 
-for (const det of (detailsList || [])) {
-  const res = await addOptionalMaterialSizeForLine(det, x.size);
-  ok = !!res?.ok;
-  why = res?.why || '';
-  if (!ok) continue;
+  LOG(`   · prøver å legge til ${x.size} (linje ${id})`);
+  const res = await addSizeScopedToLine(dataRow, x.size);
 
-  await sleep(450);
-  for (const dd of (detailsList || [])) await ensureAllTilesMounted(dd || d);
-
-  const afterCount = countTilesForSizeVariant(detailsList, x.size, variant);
-  if (afterCount > beforeCount) { ok = true; break; }
-
-  // hvis vi “klikket” men ingenting ble lagt til, fortsett og prøv neste det
-  ok = false;
-  why = 'Klikk utført, men ingen ny tile dukket opp';
-}
-
-// fallback siste sjanse (portal / rare DOM-plasseringer)
-if (!ok) {
-  const res2 = await addOptionalMaterialSizeForLine(document, x.size);
-  ok = !!res2?.ok;
-  why = res2?.why || why;
-
-  if (ok) {
-    await sleep(450);
-    for (const dd of (detailsList || [])) await ensureAllTilesMounted(dd || d);
-    const afterCount2 = countTilesForSizeVariant(detailsList, x.size, variant);
-    ok = (afterCount2 > beforeCount);
-    if (!ok) why = 'Global-klikk, men ingen ny tile dukket opp';
+  if (!res.ok) {
+    LOG(`   ! Klarte ikke å legge til ${x.size}: ${res.reason}`);
+    break;
   }
+
+  LOG(`   + La til størrelse: ${x.size}`);
+
+  await sleep(350);
+  // Rebuild etter add slik at scripts kan matches på de nye tilesene
+  ({detailsList, entries} = await rebuildDetailsAndEntries(rowsForId));
 }
 
-if (!ok) {
-  LOG(`   ! Klarte ikke å legge til ${x.size}: ${why || 'ukjent'}`);
-  break;
-}
-
-LOG(`   + La til størrelse: ${x.size}`);
-
-await sleep(450);
-
-// mount tiles i alle detaljer (ikke bare document)
-for (const det of (detailsList || [])) {
-  await ensureAllTilesMounted(det || d);
-}
-
-
-            }
           }
 
           ({detailsList, entries} = await rebuildDetailsAndEntries(rowsForId));
