@@ -495,32 +495,44 @@ function getExpandBtnForDataRow(dataRow){
   }
   return null;
 }
-function getCollapseRowForDataRow(dataRow){
-  if(!dataRow) return null;
+function getCollapseRowsForDataRow(dataRow){
+  const out=[];
+  if(!dataRow) return out;
+
   let sib=dataRow.nextElementSibling;
-  for(let i=0;i<6 && sib;i++){
-    if(sib.querySelector?.('.set-matSpecCreativeSection, .set-creativeSectionContainer, .set-creativeContainer')) return sib;
+  for(let i=0;i<30 && sib;i++){
+    // stopp når vi møter neste data-row
+    if(sib.matches?.('tr.set-matSpecDataRow')) break;
+
+    // typisk collapse-row inneholder creative containers / creative section
+    if(sib.querySelector?.('.set-matSpecCreativeSection, .set-creativeSectionContainer, .set-creativeContainer')){
+      out.push(sib);
+    }
+
     sib=sib.nextElementSibling;
   }
-  return dataRow.nextElementSibling||null;
+  return out;
 }
+
 async function ensureLineExpanded(dataRow){
-  let collapseRow=getCollapseRowForDataRow(dataRow);
-  if(collapseRow && collapseRow.querySelector('.set-matSpecCreativeSection, .set-creativeSectionContainer, .set-creativeContainer')){
-    return collapseRow;
-  }
+  // hvis allerede expanded: returnér alle collapse rows
+  let rows=getCollapseRowsForDataRow(dataRow);
+  if(rows.length) return rows;
+
   const expBtn=getExpandBtnForDataRow(dataRow);
   if(expBtn){
     expBtn.scrollIntoView({block:'center'});
     expBtn.click();
   }
-  collapseRow=await waitFor(()=>{
-    const cr=getCollapseRowForDataRow(dataRow);
-    if(cr && cr.querySelector('.set-matSpecCreativeSection, .set-creativeSectionContainer, .set-creativeContainer')) return cr;
-    return null;
-  },3000,80);
-  return collapseRow;
+
+  rows=await waitFor(()=>{
+    const r=getCollapseRowsForDataRow(dataRow);
+    return r.length ? r : null;
+  }, 4000, 80);
+
+  return rows || [];
 }
+
 
 /* ========= add optional material (dropdown) ========= */
 function getAddOptionalBtn(scope){
@@ -596,20 +608,25 @@ function doPointerClick(el){
 }
 
 async function addSizeScopedToLine(dataRow,sizeText){
-  const collapseRow=await ensureLineExpanded(dataRow);
-  if(!collapseRow) return {ok:false,reason:"Fant ikke collapse-rad / klarte ikke ekspandere linja"};
+  const collapseRows = await ensureLineExpanded(dataRow);
+  if(!collapseRows || !collapseRows.length) return {ok:false,reason:"Fant ingen collapse-rad(er) / klarte ikke ekspandere linja"};
 
-  const innerBtn=getAddOptionalBtn(collapseRow);
+  // Velg collapse-raden som faktisk har knappen (ofte siste)
+  let scope = collapseRows.find(r => getAddOptionalBtn(r)) || collapseRows[collapseRows.length - 1];
+
+  const innerBtn=getAddOptionalBtn(scope);
   if(!innerBtn) return {ok:false,reason:"Fant ikke 'Legg til valgfri materiell'-knapp i linja"};
 
-  const toggleBtn=
+  const toggleBtn =
     innerBtn.closest('button[aria-haspopup="true"]') ||
     innerBtn.closest('[role="button"][aria-haspopup="true"]') ||
     innerBtn.closest('button');
+
   if(!toggleBtn) return {ok:false,reason:"Fant ikke dropdown-toggle for 'Legg til valgfri materiell'"};
 
-  const beforeTotal=countTilesInCollapse(collapseRow);
-  const beforeSize =countSizeTilesInCollapse(collapseRow,sizeText);
+  const beforeTotal = collapseRows.reduce((a,r)=>a+countTilesInCollapse(r),0);
+const beforeSize  = collapseRows.reduce((a,r)=>a+countSizeTilesInCollapse(r,sizeText),0);
+
 
   await sleep(80);
   doPointerClick(toggleBtn);
@@ -665,16 +682,18 @@ async function addSizeScopedToLine(dataRow,sizeText){
   await waitForIdle(12000);
   await sleep(250);
 
-  const ok=await waitFor(()=>{
-    const nowSize=countSizeTilesInCollapse(collapseRow,sizeText);
-    const nowTotal=countTilesInCollapse(collapseRow);
-    return (nowSize>=beforeSize+1) || (nowTotal>=beforeTotal+1);
-  },7000,80);
+  const ok = await waitFor(() => {
+  const nowTotal = collapseRows.reduce((a,r)=>a + countTilesInCollapse(r), 0);
+  const nowSize  = collapseRows.reduce((a,r)=>a + countSizeTilesInCollapse(r, sizeText), 0);
+  return (nowSize >= beforeSize + 1) || (nowTotal >= beforeTotal + 1);
+}, 7000, 80);
 
-  if(!ok){
-    const nowSize=countSizeTilesInCollapse(collapseRow,sizeText);
-    return {ok:false,reason:`Klikk utført, men ingen ny tile ble lagt til (før=${beforeSize}, nå=${nowSize}).`};
-  }
+if (!ok) {
+  const nowSize = collapseRows.reduce((a,r)=>a + countSizeTilesInCollapse(r, sizeText), 0);
+  return { ok:false, reason:`Klikk utført, men ingen ny tile ble lagt til (før=${beforeSize}, nå=${nowSize}).` };
+}
+
+
   return {ok:true};
 }
 
@@ -1133,19 +1152,25 @@ function updateReuseLabel(){
     reuseTxt.textContent='Gjenbruk';
   }
 }
+const REUSE_LAST_KEY='ap3p_reuse_assets_last';
+
 function syncReuseWithAddExtra(){
   if(addExtraSizes){
+    if(!reuseCb.disabled) S(REUSE_LAST_KEY, reuseAssets); // lagre kun første gang
     reuseAssets=false;
     reuseCb.checked=false;
     reuseCb.disabled=true;
     S(REUSE_KEY_NEW,reuseAssets);
-  }else{
+  } else {
     reuseCb.disabled=false;
-    reuseAssets=!!G(REUSE_KEY_NEW,true);
+    reuseAssets=!!G(REUSE_LAST_KEY, true);
     reuseCb.checked=reuseAssets;
+    S(REUSE_KEY_NEW,reuseAssets);
   }
   updateReuseLabel();
 }
+
+
 reuseCb.onchange=()=>{
   reuseAssets=reuseCb.checked;
   S(REUSE_KEY_NEW,reuseAssets);
@@ -1377,27 +1402,34 @@ btnScan.onclick=async()=>{
   const byId=new Map();
 
   // Scan: åpne hver linje med ensureLineExpanded
-  for(const r of rows){
-    if(stopping) break;
-    await ensureCampaignView();
-    await waitForIdle();
+  // Scan: åpne hver linje med ensureLineExpanded
+for (const r of rows) {
+  if (stopping) break;
 
-    const id=rowId(r);
-    const det=await ensureLineExpanded(r);
-    if(!det){
-      LOG(`! Klarte ikke å åpne linje ${id} (fant ikke collapse/creative section). Hopper over.`);
-      continue;
-    }
+  await ensureCampaignView();
+  await waitForIdle();
 
+  const id = rowId(r);
+  const detRows = await ensureLineExpanded(r);
+
+  if (!detRows || !detRows.length) {
+    LOG(`! Klarte ikke å åpne linje ${id} (fant ikke collapse/creative section). Hopper over.`);
+    continue;
+  }
+
+  for (const det of detRows) {
     await waitForIdle();
     await ensureAllTilesMounted(det);
     await sleep(80);
 
-    const entries=sizesFromExpanded(det);
-    const prev=byId.get(id)||[];
+    const entries = sizesFromExpanded(det);
+    const prev = byId.get(id) || [];
     byId.set(id, prev.concat(entries));
-    await sleep(40);
   }
+
+  await sleep(40);
+}
+
 
   const report=[];
   for(const [id,arr] of byId.entries()){
@@ -1447,13 +1479,14 @@ async function rebuildDetailsAndEntries(rowsForId){
     if(!r) continue;
     await ensureCampaignView();
     await waitForIdle();
-    const det=await ensureLineExpanded(r);
-    if(det){
-      detailsList.push(det);
-      await waitForIdle();
-      await ensureAllTilesMounted(det);
-      await sleep(80);
-    }
+    const detRows = await ensureLineExpanded(r);
+for(const det of (detRows || [])){
+  detailsList.push(det);
+  await waitForIdle();
+  await ensureAllTilesMounted(det);
+  await sleep(80);
+}
+
   }
 
   const all=[];
@@ -1777,6 +1810,7 @@ w.addEventListener('keydown',e=>{ if(e.altKey && e.key.toLowerCase()==='a'){ e.p
 })();
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
+
 
 
 
