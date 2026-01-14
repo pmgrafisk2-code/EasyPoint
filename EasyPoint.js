@@ -152,6 +152,15 @@ function tileHasSize(tile,size){
   return false;
 }
 
+function setNativeValue(el, value) {
+  const proto = Object.getPrototypeOf(el);
+  const desc = Object.getOwnPropertyDescriptor(proto, "value");
+  const setter = desc && desc.set;
+  if (setter) setter.call(el, value);
+  else el.value = value;
+}
+
+
 /* ========= sizes from expanded ========= */
 function sizesFromExpanded(details){
   if(!details) return [];
@@ -289,9 +298,11 @@ function pasteInto(target,value){
   const ta=target.el||target;
   ta.scrollIntoView({block:'center'});
   ta.focus();
-  ta.value=value;
-  ta.dispatchEvent(new Event('input',{bubbles:true}));
-  ta.dispatchEvent(new Event('change',{bubbles:true}));
+  setNativeValue(ta, value);
+ta.dispatchEvent(new Event('input',  { bubbles:true }));
+ta.dispatchEvent(new Event('change', { bubbles:true }));
+ta.dispatchEvent(new Event('blur',   { bubbles:true })); // hjelper ofte MUI aktivere lagreknapp
+
 }
 async function clickSaveOrReprocess(scope){
   const root=scope?.panel || d.querySelector('#InfoPanelContainer') || d;
@@ -1877,6 +1888,7 @@ w.addEventListener('keydown',e=>{ if(e.altKey && e.key.toLowerCase()==='a'){ e.p
 })();
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
+
 
 
 
