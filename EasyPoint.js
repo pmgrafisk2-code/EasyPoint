@@ -305,16 +305,32 @@ ta.dispatchEvent(new Event('blur',   { bubbles:true })); // hjelper ofte MUI akt
 
 }
 async function clickSaveOrReprocess(scope){
-  const root=scope?.panel || d.querySelector('#InfoPanelContainer') || d;
-  const btn=[...root.querySelectorAll('button')].filter(vis).find(b=>{
-    const t=(b.textContent||'').toLowerCase();
-    return /lagre|save|oppdater|update|send inn på nytt|reprocess/i.test(t)
-      && !b.disabled
-      && !b.classList.contains('Mui-disabled');
-  });
-  if(btn){ btn.scrollIntoView({block:'center'}); btn.click(); await sleep(700); return true; }
+  const root = scope?.panel || d.querySelector('#InfoPanelContainer') || d;
+
+  const btn = [...root.querySelectorAll('button')]
+    .filter(vis)
+    .find(b => {
+      const txt = (
+        b.textContent ||
+        b.getAttribute('aria-label') ||
+        b.getAttribute('title') ||
+        ''
+      ).toLowerCase();
+
+      return /lagre|save|oppdater|update|send inn på nytt|reprocess/i.test(txt)
+        && !b.disabled
+        && !b.classList.contains('Mui-disabled');
+    });
+
+  if (btn) {
+    btn.scrollIntoView({ block: 'center' });
+    btn.click();
+    await sleep(700);
+    return true;
+  }
   return false;
 }
+
 
 /* ========= verify/retry ========= */
 function normalizeTagForCompare(s){
@@ -919,7 +935,7 @@ ui.style.cssText='position:fixed;right:16px;bottom:16px;z-index:2147483647;backg
 
 const hdr=d.createElement('div');
 hdr.style.cssText='cursor:move;user-select:none;display:flex;align-items:center;gap:10px;padding:8px 10px;background:#161922;border-radius:12px 12px 0 0;border-bottom:1px solid #2a2d37';
-const title=d.createElement('div'); title.textContent='EasyPoint';
+const title=d.createElement('div'); title.textContent='EasyPoint (patch)';
 const badge=d.createElement('span'); badge.style.opacity='.8'; badge.style.marginLeft='6px'; badge.textContent='';
 const mapChip=d.createElement('span'); mapChip.className='chip chip-none';
 const mapClear=d.createElement('button'); mapClear.textContent='×'; mapClear.title='Tøm mapping'; mapClear.style.cssText='margin-left:4px;border:1px solid #2a2d37;background:#1a1d27;color:#e6e6e6;width:22px;height:22px;border-radius:6px;cursor:pointer';
