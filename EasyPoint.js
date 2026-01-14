@@ -59,6 +59,18 @@ function extractLineIds(str){
   return [...ids];
 }
 
+async function waitConfirmUIHealthy(){
+  // kort idle, ikke tung
+  await waitForIdle(8000);
+  // hvis vi ikke er i campaign view og ikke har infopanel, gjør en myk reset
+  const panel = d.querySelector('#InfoPanelContainer');
+  if(!inCampaignTableView() && !panel){
+    await ensureCampaignView();
+    await waitForIdle(12000);
+  }
+}
+
+
 /* ========= detect side ========= */
 function detectSide(str){
   const s=(str||'').toLowerCase().replace('høyre','hoyre');
@@ -242,23 +254,33 @@ async function ensurePanelSwitchedToTile(tile, timeout=3000){
   return !!ok;
 }
 
-/* ========= 3rd-party tab ========= */
-async function open3PTab(){
-  const t=[...d.querySelectorAll('button[role="tab"],a[role="tab"],button,a')]
-    .filter(vis)
-    .find(b=>/\b3(?:rd)?\s*party\s*tag\b/i.test(b.textContent||''));
-  if(t) t.click();
+/* ========= 3rd-party tab (FAST + stable) ========= */
+async function get3PEditorFast(){
+  const panel = d.querySelector('#InfoPanelContainer') || d;
 
-  const editor=await waitFor(()=>{
-    const panel=d.querySelector('#InfoPanelContainer')||d;
-    const cm=[...panel.querySelectorAll('.CodeMirror')].find(vis);
-    if(cm) return {kind:'cm',el:cm,panel,cm:cm.CodeMirror};
-    const ta=[...panel.querySelectorAll('textarea')].find(vis);
-    if(ta) return {kind:'ta',el:ta,panel};
+  // 1) Fast path: editor allerede synlig i panelet
+  const cm = [...panel.querySelectorAll('.CodeMirror')].find(vis);
+  if (cm) return {kind:'cm', el:cm, panel, cm: cm.CodeMirror};
+
+  const ta = [...panel.querySelectorAll('textarea')].find(vis);
+  if (ta) return {kind:'ta', el:ta, panel};
+
+  // 2) Fallback: klikk tab kun hvis nødvendig
+  const tab = [...d.querySelectorAll('button[role="tab"],a[role="tab"],button,a')]
+    .filter(vis)
+    .find(b => /\b3(?:rd)?\s*party\s*tag\b/i.test(b.textContent||''));
+  tab?.click();
+
+  // 3) Vent kort på at editor dukker opp
+  return await waitFor(()=>{
+    const cm2=[...panel.querySelectorAll('.CodeMirror')].find(vis);
+    if(cm2) return {kind:'cm', el:cm2, panel, cm: cm2.CodeMirror};
+    const ta2=[...panel.querySelectorAll('textarea')].find(vis);
+    if(ta2) return {kind:'ta', el:ta2, panel};
     return null;
-  },4000,120);
-  return editor||null;
+  }, 2500, 80);
 }
+
 function pasteInto(target,value){
   if(!target) return;
   if(target.kind==='cm' && target.cm){
@@ -1470,6 +1492,7 @@ btnRun.onclick=()=>{
   if(!ids.length){LOG('Ingen valgt — trykk Skann og velg linjer.');return}
   if(!mapping.length && imagePool.size===0){LOG('Ingen mapping — importer CSV/JSON eller bilder først.');return}
   runOnIds(ids);
+  
 };
 
 /* ========= rebuild details + entries (standard: ensureLineExpanded) ========= */
@@ -1523,7 +1546,9 @@ async function runOnIds(ids){
 
       // Sørg for at de er åpne (en gang per ID)
       await ensureCampaignView();
-      await waitForIdle();
+await waitForIdle();
+await waitConfirmUIHealthy();
+
       for(const dr of rowsForId){
         if(stopping) break;
         await ensureLineExpanded(dr);
@@ -1605,8 +1630,12 @@ async function runOnIds(ids){
 
               LOG(`   + La til størrelse: ${x.size}`);
 
-              await waitForIdle(12000);
-              await sleep(700);
+              await waitForIdle(15000);
+await sleep(500);
+for(const dr of rowsForId) await ensureLineExpanded(dr); // sørg for at linja fortsatt er åpen
+
+
+              
 
               // rebuild after adds
               ({detailsList, entries}=await rebuildDetailsAndEntries(rowsForId));
@@ -1693,35 +1722,73 @@ async function runOnIds(ids){
           const payload=reuseAssets ? list[i%list.length] : (i<list.length?list[i]:null);
           if(!payload){ skipped++; continue; }
 
-          if(i>0 && (i%8===0)) await checkpoint(`størrelse ${i}/${tiles.length}`);
+          if(i>0 && (i%18===0)) await checkpoint(`størrelse ${i}/${tiles.length}`);
+
 
           const tile=tiles[i];
 
           await selectTile(tile);
-          await ensurePanelSwitchedToTile(tile,3500);
-          await ensurePanelOnSize(entry.size,6000);
+await ensurePanelSwitchedToTile(tile,3500);
 
-          const editor=await open3PTab();
-          await sleep(120);
-          if(!editor){ LOG('   ! Fant ikke 3rd-party editor'); stats.err++; continue; }
+// Dropp ensurePanelOnSize her – det er dyrt og ofte unødvendig
+let editor = await get3PEditorFast();
+await sleep(60);
+
+if(!editor){
+  await ensurePanelOnSize(entry.size, 800);
+  await waitForIdle(6000);
+
+  const editor2 = await get3PEditorFast();
+  if(!editor2){ LOG('   ! Fant ikke 3rd-party editor'); stats.err++; continue; }
+  editor = editor2;
+}
+
+await sleep(120);
+if(!editor){ LOG('   ! Fant ikke 3rd-party editor'); stats.err++; continue; }
+
 
           // overwrite logic
           if(overwriteMode==='empty'){
-            if(tileHasMaterial(tile)){ skipped++; continue; }
+  // 1) superrask guard
+  if(tileHasMaterial(tile)){ skipped++; continue; }
 
-            const current=await getEditorValueStable(editor,12,150);
-            if(isEmpty3PValue(current)){
-              try{(editor.el||editor).focus?.()}catch{}
-              try{(editor.el||editor).click?.()}catch{}
-              await sleep(120);
-            }
-            const current2=await getEditorValueStable(editor,6,150);
-            if(!isEmpty3PValue(current2)){ skipped++; continue; }
-          }
+  // 2) les editor raskt (1–2 samples), ikke 18 samples
+  await sleep(60);
+  let cur = getEditorValue(editor);
+
+  if(isEmpty3PValue(cur)){
+    // liten "nudge" om CodeMirror ikke har oppdatert seg ennå
+    try{ (editor.el||editor).focus?.(); (editor.el||editor).click?.(); }catch{}
+    await sleep(120);
+    cur = getEditorValue(editor);
+  }
+
+  if(!isEmpty3PValue(cur)){ skipped++; continue; }
+}
+
 
           const tagStr=(typeof payload==='string') ? payload : (payload?.tag||'');
-          const pasted=await pasteWithVerify(editor,tagStr,2);
-          if(!pasted){ LOG('   ! Lim inn festet ikke (etter retries) — hopper over størrelse'); stats.err++; continue; }
+          let pasted = await pasteWithVerify(editor, tagStr, 2);
+
+if(!pasted){
+  // Stabil recovery én gang: UI kan ha mistet fokus / editor ikke ready
+  await waitForIdle(6000);
+  await selectTile(tile);
+  await ensurePanelSwitchedToTile(tile,2500);
+
+  const ed2 = await get3PEditorFast();
+  if(ed2){
+    pasted = await pasteWithVerify(ed2, tagStr, 2);
+    if(pasted) editor = ed2;
+  }
+}
+
+if(!pasted){
+  LOG('   ! Lim inn festet ikke (etter recovery) — hopper over størrelse');
+  stats.err++;
+  continue;
+}
+
 
           used++;
           if(G('ap3p_auto',true)){
@@ -1810,6 +1877,7 @@ w.addEventListener('keydown',e=>{ if(e.altKey && e.key.toLowerCase()==='a'){ e.p
 })();
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
+
 
 
 
