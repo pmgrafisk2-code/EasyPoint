@@ -70,6 +70,31 @@ async function waitConfirmUIHealthy(){
   }
 }
 
+async function openAddSizeMenuForRow(row){
+  const btn = [...row.querySelectorAll('button')]
+    .find(b => /Legg til valgfri materiell/i.test(b.textContent||''));
+  if(!btn) return null;
+  btn.click();
+  // menyen er en "dropdown---dropdown-menu" i DOM (se HTML)
+  return await waitFor(()=> d.querySelector('[role="menu"].dropdown---dropdown-menu---1fkH0'), 1500, 60);
+}
+
+function readSizesFromMenu(menu){
+  return [...menu.querySelectorAll('[role="menuitem"]')]
+    .map(mi => (mi.textContent||'').trim())
+    .filter(Boolean);
+}
+
+async function getAllowedAddSizesForLine(row){
+  const menu = await openAddSizeMenuForRow(row);
+  if(!menu) return [];
+  const sizes = readSizesFromMenu(menu);
+  // lukk meny (klikk utenfor)
+  d.body.click();
+  await sleep(60);
+  return sizes;
+}
+
 
 /* ========= detect side ========= */
 function detectSide(str){
@@ -239,12 +264,13 @@ function panelHasSize(size){
   const txt=cs(panel.innerText||'');
   return txt.includes(want);
 }
-async function ensurePanelOnSize(size, timeout=5000){
-  await waitForIdle(12000);
-  const ok=await waitFor(()=>panelHasSize(size), timeout, 80);
-  await sleep(120);
+async function ensurePanelOnSize(size, timeout=1500){
+  // IKKE vent på full idle her – bare poll at panelet faktisk viser riktig størrelse
+  const ok = await waitFor(() => panelHasSize(size), timeout, 60);
+  if(ok) await sleep(60);
   return !!ok;
 }
+
 async function ensurePanelSwitchedToTile(tile, timeout=3000){
   if(!tile) return false;
   await waitFor(()=>isTileSelected(tile), timeout, 60);
@@ -264,31 +290,41 @@ async function ensurePanelSwitchedToTile(tile, timeout=3000){
 }
 
 /* ========= 3rd-party tab (FAST + stable) ========= */
-async function get3PEditorFast(){
-  const panel = d.querySelector('#InfoPanelContainer') || d;
-
-  // 1) Fast path: editor allerede synlig i panelet
-  const cm = [...panel.querySelectorAll('.CodeMirror')].find(vis);
-  if (cm) return {kind:'cm', el:cm, panel, cm: cm.CodeMirror};
-
-  const ta = [...panel.querySelectorAll('textarea')].find(vis);
-  if (ta) return {kind:'ta', el:ta, panel};
-
-  // 2) Fallback: klikk tab kun hvis nødvendig
-  const tab = [...d.querySelectorAll('button[role="tab"],a[role="tab"],button,a')]
-    .filter(vis)
-    .find(b => /\b3(?:rd)?\s*party\s*tag\b/i.test(b.textContent||''));
-  tab?.click();
-
-  // 3) Vent kort på at editor dukker opp
-  return await waitFor(()=>{
-    const cm2=[...panel.querySelectorAll('.CodeMirror')].find(vis);
-    if(cm2) return {kind:'cm', el:cm2, panel, cm: cm2.CodeMirror};
-    const ta2=[...panel.querySelectorAll('textarea')].find(vis);
-    if(ta2) return {kind:'ta', el:ta2, panel};
-    return null;
-  }, 2500, 80);
+function getThirdPartyPanel(){
+  // Tabpanel for THIRD_PARTY_TAG (du har id/aria-labelledby i HTML)
+  return d.querySelector('[role="tabpanel"][id*="THIRD_PARTY_TAG"],[role="tabpanel"][aria-labelledby*="THIRD_PARTY_TAG"]');
 }
+
+function clickThirdPartyTab(){
+  const tab = [...d.querySelectorAll('[role="tab"],button,a')]
+    .find(el => /THIRD_PARTY_TAG/i.test(el.id||'') || /\b3(?:rd)?\s*party\b|\b3\.\s*party\b/i.test(el.textContent||''));
+  tab?.click();
+}
+
+async function get3PEditorStrict(){
+  // 1) Sørg for at tabpanel finnes (evt. klikk tab)
+  let panel = getThirdPartyPanel();
+  if(!panel || panel.hasAttribute('hidden')){
+    clickThirdPartyTab();
+    panel = await waitFor(()=> {
+      const p = getThirdPartyPanel();
+      if(p && !p.hasAttribute('hidden')) return p;
+      return null;
+    }, 2500, 80);
+  }
+  if(!panel) return null;
+
+  // 2) Finn CodeMirror kun i third-party container
+  const cm = [...panel.querySelectorAll('.third-party .CodeMirror')].find(vis);
+  if(cm) return { kind:'cm', el:cm, panel, cm: cm.CodeMirror };
+
+  // 3) Siste fallback: textarea men kun hvis den ligger INNE i .third-party
+  const ta = [...panel.querySelectorAll('.third-party textarea')].find(vis);
+  if(ta) return { kind:'ta', el:ta, panel };
+
+  return null;
+}
+
 
 function pasteInto(target,value){
   if(!target) return;
@@ -935,7 +971,7 @@ ui.style.cssText='position:fixed;right:16px;bottom:16px;z-index:2147483647;backg
 
 const hdr=d.createElement('div');
 hdr.style.cssText='cursor:move;user-select:none;display:flex;align-items:center;gap:10px;padding:8px 10px;background:#161922;border-radius:12px 12px 0 0;border-bottom:1px solid #2a2d37';
-const title=d.createElement('div'); title.textContent='EasyPoint (patch)';
+const title=d.createElement('div'); title.textContent='EasyPoint';
 const badge=d.createElement('span'); badge.style.opacity='.8'; badge.style.marginLeft='6px'; badge.textContent='';
 const mapChip=d.createElement('span'); mapChip.className='chip chip-none';
 const mapClear=d.createElement('button'); mapClear.textContent='×'; mapClear.title='Tøm mapping'; mapClear.style.cssText='margin-left:4px;border:1px solid #2a2d37;background:#1a1d27;color:#e6e6e6;width:22px;height:22px;border-radius:6px;cursor:pointer';
@@ -1590,88 +1626,119 @@ await waitConfirmUIHealthy();
       let wrote=false;
 
       // ---- add extra sizes (optional) ----
-      if(addExtraSizes && mapping.length){
-        // keys that match this line (line-scoped rows included) or global
-        const svKeys=new Set();
-        for(const m of (mapping||[])){
-          const idsArr=(m.lineIds||[]).map(String).filter(Boolean);
-          if(idsArr.length && !idsArr.includes(String(id))) continue;
-          if(!m.size || !m.tag) continue;
-          svKeys.add(`${m.size}|${m.variant||''}`);
-        }
+if(addExtraSizes && mapping.length){
 
-        for(const det of detailsList) await ensureAllTilesMounted(det);
-        await sleep(80);
+  // 1) Finn hvilke størrelser som i det hele tatt er relevante for denne ID-en (linje-scope + global)
+  const svKeys=new Set();
+  for(const m of (mapping||[])){
+    const idsArr=(m.lineIds||[]).map(String).filter(Boolean);
+    if(idsArr.length && !idsArr.includes(String(id))) continue; // line-scoped men ikke denne id
+    if(!m.size || !m.tag) continue;
+    svKeys.add(`${m.size}|${m.variant||''}`);
+  }
 
-        const needList=[];
-        for(const k of svKeys){
-          const [sz,vr]=k.split('|');
-          const variant=vr||null;
+  // 2) Bygg en "allowed sizes" liste per dataRow (hva menyen faktisk tilbyr)
+  //    (menyen er linje-spesifikk, så dette er kritisk)
+  const allowedByRow = new Map(); // dr -> Set(sizes)
+  const allowedUnion = new Set(); // alle sizes som finnes på minst én av dr-ene
 
-          const exactLine=pools.getExact(id,sz,variant);
-          const sizeLine =pools.getSize(id,sz);
-          const exactAny =pools.getExact(null,sz,variant);
-          const sizeAny  =pools.getSize(null,sz);
+  for(const dr of rowsForId){
+    if(stopping) break;
+    await ensureLineExpanded(dr);
+    await ensureCampaignView();
+    await waitForIdle();
 
-          let list;
-          if(pools.hasLineIds){
-            if(exactLine.length) list=exactLine;
-            else if(sizeLine.length) list=sizeLine;
-            else if(exactAny.length) list=exactAny;
-            else list=sizeAny;
-          }else{
-            list=exactAny.length?exactAny:sizeAny;
-          }
+    const allowed = await getAllowedAddSizesForLine(dr); // du har denne funksjonen allerede
+    const set = new Set((allowed||[]).map(cs));         // normaliser "580x500"
+    allowedByRow.set(dr, set);
+    for(const s of set) allowedUnion.add(s);
+  }
 
-          const scriptsCount=list?.length||0;
-          if(!scriptsCount) continue;
+  // 3) Sørg for at tiles er montert før vi teller
+  for(const det of detailsList) await ensureAllTilesMounted(det);
+  await sleep(80);
 
-          const tilesCount=countTilesBySizesFromExpanded(detailsList,sz,variant);
-          const need=Math.max(0,scriptsCount-tilesCount);
-          if(need>0) needList.push({size:sz,variant,need});
-        }
+  // 4) Regn ut hva vi MANGLER (scriptsCount - tilesCount) pr størrelse
+  const needList=[];
+  for(const k of svKeys){
+    const [szRaw,vr]=k.split('|');
+    const sz = cs(szRaw);
+    const variant = vr || null;
 
-        if(needList.length){
-          LOG(`   · Legg-til plan (${id}): `+needList.map(x=>`${x.size}×${x.need}`).join(', '));
+    // 🚫 Hvis ingen av linjene tilbyr denne størrelsen i Add-menyen, ikke prøv i det hele tatt.
+    if(!allowedUnion.has(sz)) continue;
 
-          for(const x of needList){
-            if(stopping) break;
+    const exactLine=pools.getExact(id,sz,variant);
+    const sizeLine =pools.getSize(id,sz);
+    const exactAny =pools.getExact(null,sz,variant);
+    const sizeAny  =pools.getSize(null,sz);
 
-            for(let n=0;n<x.need;n++){
-              if(stopping) break;
+    let list;
+    if(pools.hasLineIds){
+      if(exactLine.length) list=exactLine;
+      else if(sizeLine.length) list=sizeLine;
+      else if(exactAny.length) list=exactAny;
+      else list=sizeAny;
+    }else{
+      list=exactAny.length?exactAny:sizeAny;
+    }
 
-              await ensureCampaignView();
-              await waitForIdle();
+    const scriptsCount=list?.length||0;
+    if(!scriptsCount) continue;
 
-              let res=null;
-              for(const dr of rowsForId){
-                if(stopping) break;
-                res=await addSizeScopedToLine(dr,x.size);
-                if(res?.ok) break;
-              }
+    const tilesCount=countTilesBySizesFromExpanded(detailsList,sz,variant);
+    const need=Math.max(0, scriptsCount - tilesCount);
+    if(need>0) needList.push({size:sz,variant,need});
+  }
 
-              if(!res?.ok){
-                LOG(`   ! Klarte ikke å legge til ${x.size}: ${res?.reason||'ukjent feil'}`);
-                break;
-              }
+  if(needList.length){
+    LOG(`   · Legg-til plan (${id}): `+needList.map(x=>`${x.size}×${x.need}`).join(', '));
 
-              LOG(`   + La til størrelse: ${x.size}`);
+    for(const x of needList){
+      if(stopping) break;
 
-              await waitForIdle(15000);
-await sleep(500);
-for(const dr of rowsForId) await ensureLineExpanded(dr); // sørg for at linja fortsatt er åpen
-
-
-              
-
-              // rebuild after adds
-              ({detailsList, entries}=await rebuildDetailsAndEntries(rowsForId));
-            }
-          }
-
-          LOG(`   · Etter legg-til: størrelser=[${prettyCounts(entries)||'—'}]`);
-        }
+      // Finn hvilke rows som faktisk tilbyr denne størrelsen
+      const candidateRows = rowsForId.filter(dr => (allowedByRow.get(dr)||new Set()).has(cs(x.size)));
+      if(!candidateRows.length){
+        LOG(`   ! Hopper over ${x.size}: ingen av valgte linjer tilbyr denne størrelsen i menyen`);
+        continue;
       }
+
+      for(let n=0;n<x.need;n++){
+        if(stopping) break;
+
+        await ensureCampaignView();
+        await waitForIdle();
+
+        let res=null;
+
+        // ✅ Prøv KUN på rader som har størrelsen i menyen
+        for(const dr of candidateRows){
+          if(stopping) break;
+          res = await addSizeScopedToLine(dr, x.size);
+          if(res?.ok) break;
+        }
+
+        if(!res?.ok){
+          LOG(`   ! Klarte ikke å legge til ${x.size}: ${res?.reason||'ukjent feil'}`);
+          break;
+        }
+
+        LOG(`   + La til størrelse: ${x.size}`);
+
+        await waitForIdle(15000);
+        await sleep(500);
+        for(const dr of rowsForId) await ensureLineExpanded(dr);
+
+        // rebuild after adds
+        ({detailsList, entries}=await rebuildDetailsAndEntries(rowsForId));
+      }
+    }
+
+    LOG(`   · Etter legg-til: størrelser=[${prettyCounts(entries)||'—'}]`);
+  }
+}
+
 
       // ---- apply tags/images ----
       for(const entry of entries){
@@ -1758,14 +1825,15 @@ for(const dr of rowsForId) await ensureLineExpanded(dr); // sørg for at linja f
 await ensurePanelSwitchedToTile(tile,3500);
 
 // Dropp ensurePanelOnSize her – det er dyrt og ofte unødvendig
-let editor = await get3PEditorFast();
+let editor = await get3PEditorStrict();
 await sleep(60);
 
 if(!editor){
   await ensurePanelOnSize(entry.size, 800);
   await waitForIdle(6000);
 
-  const editor2 = await get3PEditorFast();
+  const editor2 = await get3PEditorStrict();
+
   if(!editor2){ LOG('   ! Fant ikke 3rd-party editor'); stats.err++; continue; }
   editor = editor2;
 }
@@ -1803,7 +1871,8 @@ if(!pasted){
   await selectTile(tile);
   await ensurePanelSwitchedToTile(tile,2500);
 
-  const ed2 = await get3PEditorFast();
+  const ed2 = await get3PEditorStrict();
+
   if(ed2){
     pasted = await pasteWithVerify(ed2, tagStr, 2);
     if(pasted) editor = ed2;
@@ -1904,6 +1973,7 @@ w.addEventListener('keydown',e=>{ if(e.altKey && e.key.toLowerCase()==='a'){ e.p
 })();
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
+
 
 
 
