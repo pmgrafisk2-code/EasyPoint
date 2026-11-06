@@ -1,6 +1,6 @@
 javascript:(()=>{try{
 /* ============================================================
-   EasyPoint 2.4 / Adpoint — kontrollert kø og massetillegging
+   EasyPoint 2.5 / Adpoint — kontrollert kø og massetillegging
    - Norsk/engelsk Adpoint, linje- og placeholder-ID ved hvert steg
    - Én jobb om gangen; stopp/lukk venter på pågående lagring
    - Legg til antall materiellplasser uten CSV; auto-opprett ved import
@@ -14,6 +14,7 @@ if(previous?.busy){ previous.focus?.(); alert('EasyPoint arbeider fortsatt. Stop
 previous?.destroy?.();
 const life=new AbortController();
 let refreshSimpleUI=()=>{};
+let invalidateSharePlan=()=>{};
 const app={busy:false,closing:false,focus:()=>d.getElementById('ap3p_bar')?.scrollIntoView({block:'nearest'})};
 class UncertainMutationError extends Error {constructor(message){super(message);this.name='UncertainMutationError';this.uncertain=true;}}
 w.__easyPoint=app;
@@ -543,13 +544,13 @@ function findRows(){
 }
 function getHeaderIdxForRow(row){
   const table=row.closest('table'); if(!table) return {lineItemIdx:-1,rosenrIdx:-1};
-  if(table._ap3p_headerIdx) return table._ap3p_headerIdx;
+  // Re-read the short header row so Norwegian Ext.nr. is recognized after an update.
   const ths=[...(table.tHead?.querySelectorAll('th')||[])];
   let lineItemIdx=-1, rosenrIdx=-1;
   ths.forEach((th,i)=>{
     const t=normLabel(th.textContent);
     if(lineItemIdx===-1 && /(^|\s)line\s*item(\s|$)|linje[- ]?(?:id|nummer)/.test(t)) lineItemIdx=i;
-    if(rosenrIdx===-1 && (/rosenr|material number|materiellnummer/.test(t))) rosenrIdx=i;
+    if(rosenrIdx===-1 && (/rosenr|material number|materiellnummer|ext\.?\s*nr\.?/.test(t))) rosenrIdx=i;
   });
   table._ap3p_headerIdx={lineItemIdx,rosenrIdx};
   return table._ap3p_headerIdx;
@@ -881,7 +882,7 @@ const log=d.createElement('div'); log.style.cssText='height:200px;overflow:auto;
 ui.append(hdr,body,listWrap,log); d.body.appendChild(ui);
 
 const LOG=m=>{log.textContent+=m+'\n'; log.scrollTop=log.scrollHeight;};
-const setInfo=o=>{app.lastStats={...o};info.textContent=`Linjer:${o.items}  Ferdig:${o.done}  Lagret:${o.saved||0}  Nye:${o.added||0}  Hoppet:${o.skip||0}  Feil:${o.err||0}  Usikkert:${o.uncertain||0}  Sendt:${o.submitted||0}`;refreshSimpleUI();};
+const setInfo=o=>{app.lastStats={...o};info.textContent=`Linjer:${o.items}  Ferdig:${o.done}  Lagret:${o.saved||0}  Nye:${o.added||0}  Hoppet:${o.skip||0}  Feil:${o.err||0}  Usikkert:${o.uncertain||0}  Sendt:${o.submitted||0}  Delt:${o.shared||0}`;refreshSimpleUI();};
 body.append(info,btnCSV,btnPaste,file,drop);
 
 /* ===== Apply saved UI state ===== */
@@ -1362,7 +1363,7 @@ bulkPlus.onclick=addBulkRow;refreshBulkOptions();
 
 function setBusy(value){
   app.busy=value;
-  const controls=[bulkDefaultCount,btnScan,btnRun,btnBulk,bulkPlus,btnCSV,btnPaste,mapClear,reuseCb,addCb,owCb,btnAll,btnNone,btnInv,
+  const controls=[btnShare,bulkDefaultCount,btnScan,btnRun,btnBulk,bulkPlus,btnCSV,btnPaste,mapClear,reuseCb,addCb,owCb,btnAll,btnNone,btnInv,
     ...bulkControls.flatMap(x=>[x.select,x.count,x.remove])];
   for(const control of controls)control.disabled=value;
   if(!value){reuseCb.disabled=addExtraSizes;btnBulk.disabled=!scanned.length;}
@@ -1488,7 +1489,7 @@ btnScan.onclick=()=>withJob('Skanner Adpoint…',async()=>{
     const label=`${prettyCounts(records)||'ingen plasser'}${material?' · materiell '+material:''}`;
     report.push({id,label,allowed});byId.set(id,records);LOG(`• ${id}: ${label}`);
   }
-  scanned=report;selected=new Set(report.map(x=>x.id));saveSelection();refreshList();refreshBulkOptions();
+  invalidateSharePlan();scanned=report;selected=new Set(report.map(x=>x.id));saveSelection();refreshList();refreshBulkOptions();
   _lastPreview=byId;renderPreview(byId);
   setInfo({items:ids.length,done:report.length});
   showToast(stopping?'Skann stoppet':'Skann ferdig',`${report.length} linjer lest`);
@@ -1531,7 +1532,7 @@ async function refreshAfterMutation(ids){
       const item=scanned.find(x=>x.id===id);if(item)item.label=prettyCounts(records)||'ingen plasser';
     }catch(error){LOG(`! Kunne ikke oppdatere visning for ${id}: ${error.message}`);}
   }
-  _lastPreview=byId;refreshList();
+  _lastPreview=byId;invalidateSharePlan();refreshList();
 }
 
 btnRun.onclick=()=>withJob('Legger inn materiell…',async()=>{
@@ -1668,6 +1669,207 @@ async function verifySubmittedWrites(receipts,stats,timeout=30000){
 }
 
 
+/* ========= native Adpoint Share, paired by slot across selected lines ========= */
+let sharePlan=null;
+const shareCard=d.createElement('section');shareCard.className='ep-card';shareCard.id='ep-share-card';
+const shareHeading=d.createElement('h2');shareHeading.className='ep-heading';shareHeading.textContent='2. Del like størrelser';
+const shareHelp=d.createElement('p');shareHelp.className='ep-help';shareHelp.textContent='Plass 1 kobles med plass 1 på andre valgte linjer, plass 2 med plass 2 osv. Rekkefølgen følger Adpoint. Nye plasser hentes automatisk.';
+const shareSummary=d.createElement('p');shareSummary.className='ep-help';shareSummary.setAttribute('aria-live','polite');
+const shareDetails=d.createElement('details'),shareDetailsLabel=d.createElement('summary');shareDetailsLabel.textContent='Vis koblingene';
+const shareList=d.createElement('div');shareList.style.cssText='display:flex;flex-direction:column;gap:8px;font-size:12px;max-height:220px;overflow:auto';
+shareDetails.append(shareDetailsLabel,shareList);
+const shareRule=d.createElement('p');shareRule.className='ep-help';shareRule.textContent='Deler innenfor samme Ext.nr., størrelse og variant. Grupper med ulikt eksisterende materiell blir hoppet over.';
+shareCard.append(shareHeading,shareHelp,shareSummary,shareDetails,shareRule);
+const btnShare=d.createElement('button');btnShare.textContent='Finn delinger';btnShare.style.cssText=btnRun.style.cssText;
+function shareScopeKey(){return selectedIds().slice().sort().join('|');}
+invalidateSharePlan=()=>{sharePlan=null;};
+function shareRecordKey(record){return record.line+'|'+record.placeholder;}
+function shareFormatKey(record){return [record.material,record.size,record.variant||'',record.side||''].join('|');}
+function shareGroupCandidates(records){
+  const perLine=new Map();
+  for(const record of records){
+    if(!record.material||!record.placeholder||!record.line||!record.size)throw new Error('Mangler Ext.nr., linje-ID, størrelse eller placeholder-ID i delingsgrunnlaget.');
+    const key=record.line+'|'+shareFormatKey(record);
+    if(!perLine.has(key))perLine.set(key,[]);perLine.get(key).push(record);
+  }
+  const groups=new Map();
+  for(const items of perLine.values())items.forEach((record,index)=>{
+    const slot=index+1,key=shareFormatKey(record)+'|'+slot;
+    if(!groups.has(key))groups.set(key,{key,slot,size:record.size,variant:record.variant,side:record.side,material:record.material,peers:[]});
+    groups.get(key).peers.push({...record,slot});
+  });
+  return [...groups.values()].filter(group=>new Set(group.peers.map(record=>record.line)).size>1);
+}
+function sameShareContent(a,b){
+  if(!a.occupied||!b.occupied)return !a.occupied&&!b.occupied;
+  if(!isEmpty3PValue(a.value)||!isEmpty3PValue(b.value))return !isEmpty3PValue(a.value)&&!isEmpty3PValue(b.value)&&sameTag(a.value,b.value);
+  return !!a.signature&&a.signature===b.signature;
+}
+function selectShareSource(group,states){
+  const filled=states.filter(state=>state.occupied);
+  if(filled.some(state=>!sameShareContent(state,filled[0])))return {conflict:true,group,reason:'Ulikt eksisterende materiell på samme plassnummer.'};
+  const source=(filled[0]||states[0]).record;
+  const targets=states.filter(state=>state.record.line!==source.line&&state.record.placeholder!==source.placeholder).map(state=>state.record);
+  return {group,source,targets,states,already:states.length-1-targets.length};
+}
+function materialForLine(id){
+  const rows=findRowsByIdAll(id);if(rows.length!==1)throw new Error(`Linje ${id} er ikke entydig.`);
+  const {rosenrIdx}=getHeaderIdxForRow(rows[0]);
+  const material=rows[0].children[rosenrIdx]?.textContent.trim();
+  if(!material)throw new Error(`Linje ${id}: Ext.nr./materialnummer kunne ikke leses. Ingen automatisk deling.`);
+  return material;
+}
+async function inspectShareRecord(record){
+  const state=await inspectRecord(record);
+  return {...state,record:{...state.record,material:record.material,slot:record.slot},signature:materialSignature(state.record.tile)};
+}
+function getShareControls(){
+  const labels=[...d.querySelectorAll('p,span,div')].filter(el=>!el.children.length&&vis(el)&&/^(?:sharing with|deler med|deles med)\s*:/i.test(el.textContent.trim()));
+  for(const label of labels){
+    let root=label.parentElement;
+    for(let depth=0;root&&depth<5;root=root.parentElement,depth++){
+      const buttons=[...root.querySelectorAll('button')].filter(vis);
+      const confirm=buttons.find(button=>/^(confirm|bekreft)$/i.test(button.textContent.trim()));
+      const cancel=buttons.find(button=>/^(cancel|avbryt)$/i.test(button.textContent.trim()));
+      if(confirm&&cancel)return {root,confirm,cancel,count:Number(label.textContent.match(/:\s*(\d+)/)?.[1]??NaN)};
+    }
+  }
+  return null;
+}
+async function cancelShareMode(){
+  const controls=getShareControls();if(!controls)return;
+  controls.cancel.click();
+  if(!await waitFor(()=>!getShareControls(),4000,80))throw new Error('Kunne ikke lukke den aktive Share-flyten.');
+}
+function shareTargetInputs(){
+  const result=[];
+  for(const input of d.querySelectorAll('.set-creativeContainer input[type="checkbox"]')){
+    if(!vis(input))continue;
+    const container=input.closest('.set-creativeContainer');
+    const tiles=getAllTiles(container);
+    if(tiles.length!==1)throw new Error('Kunne ikke koble Share-avkryssingen til én materiellplass.');
+    const tile=tiles[0],row=dataRowForTile(tile),entry=sizesFromExpanded(container)[0];
+    const placeholder=placeholderId(tile),line=row&&rowId(row);
+    if(!entry||!placeholder||!line||line==='?')throw new Error('Share-valget mangler lesbar størrelse eller ID.');
+    result.push({...entry,line,placeholder,input});
+  }
+  return result;
+}
+async function openShareForRecord(record){
+  const fresh=await getFreshRecord(record.line,record.placeholder);
+  if(!fresh||fresh.size!==record.size||(fresh.variant||null)!==(record.variant||null)||(fresh.side||null)!==(record.side||null))throw new Error('Kildemateriellet har endret seg. Hent delingsplanen på nytt.');
+  const buttons=[...fresh.tile.querySelectorAll('button[aria-haspopup="true"]')].filter(button=>vis(button)&&!isDisabled(button));
+  if(buttons.length!==1)throw new Error(`Fant ikke én menyknapp på placeholder ${record.placeholder}.`);
+  const before=new Set([...d.querySelectorAll('[role="menu"]')].filter(vis));
+  buttons[0].scrollIntoView({block:'center'});buttons[0].click();
+  const menu=await waitFor(()=>{
+    const menus=[...d.querySelectorAll('[role="menu"]')].filter(el=>vis(el)&&!before.has(el));
+    return menus.length===1?menus[0]:null;
+  },4000,80);
+  if(!menu)throw new Error('Menyen for kildemateriellet åpnet seg ikke entydig.');
+  const shares=[...menu.querySelectorAll('[role="menuitem"]')].filter(el=>/^(share|del materiell)$/i.test(el.textContent.trim())&&!isDisabled(el));
+  if(shares.length!==1)throw new Error('Fant ikke ett tilgjengelig Share-valg for kilden.');
+  shares[0].click();
+  if(!await waitFor(()=>getShareControls(),5000,80))throw new Error('Share-flyten åpnet seg ikke.');
+}
+async function readShareGroup(group){
+  const states=[];
+  for(const record of group.peers){
+    requireRunning();
+    const material=materialForLine(record.line);
+    const current=(await recordsForLine(record.line)).filter(entry=>entry.size===group.size&&(entry.variant||'')===(group.variant||'')&&(entry.side||'')===(group.side||''))[group.slot-1];
+    if(material!==record.material||!current||current.placeholder!==record.placeholder)throw new Error('Materiellplassene har endret seg siden planen ble hentet. Hent planen på nytt.');
+    states.push(await inspectShareRecord({...current,material,slot:group.slot}));
+  }
+  return states;
+}
+async function buildSharePlan(ids){
+  await cancelShareMode();
+  const records=[];
+  for(const id of ids){requireRunning();const material=materialForLine(id);records.push(...(await recordsForLine(id)).map(record=>({...record,material})));}
+  const candidates=shareGroupCandidates(records),groups=[],conflicts=[];let already=0;
+  for(const group of candidates){
+    const states=await readShareGroup(group),choice=selectShareSource(group,states);
+    if(choice.conflict){conflicts.push(choice);LOG(`! ${group.size}, plass ${group.slot}: ${choice.reason}`);continue;}
+    already+=choice.already;
+    if(choice.targets.length)groups.push(choice);
+  }
+  return {scope:shareScopeKey(),groups,conflicts,already,total:groups.reduce((sum,group)=>sum+group.targets.length,0)};
+}
+function renderSharePlan(){
+  shareList.replaceChildren();
+  if(!sharePlan){shareSummary.textContent='Finn delinger for å hente en fersk plan fra Adpoint, inkludert nye materiellplasser.';return;}
+  shareSummary.textContent=sharePlan.total?`${sharePlan.total} koblinger klare i ${sharePlan.groups.length} grupper.`:'Ingen nye koblinger funnet.';
+  if(sharePlan.conflicts.length)shareSummary.textContent+=` ${sharePlan.conflicts.length} grupper har ulikt materiell og blir hoppet over.`;
+  if(sharePlan.already)shareSummary.textContent+=` ${sharePlan.already} plasser har allerede samme placeholder-ID.`;
+  for(const entry of [...sharePlan.groups,...sharePlan.conflicts]){
+    const text=d.createElement('div');text.style.cssText='border:1px solid #303644;border-radius:6px;padding:8px;overflow-wrap:anywhere';
+    const group=entry.group,label=[group.size,group.variant,group.side].filter(Boolean).join('/');
+    text.textContent=entry.conflict?`${label} · plass ${group.slot}: ${entry.reason}`
+      :`${label} · plass ${group.slot}\nFra linje ${entry.source.line}, placeholder ${entry.source.placeholder}\nTil: ${entry.targets.map(record=>record.line+' / '+record.placeholder).join(', ')}`;
+    text.style.whiteSpace='pre-wrap';shareList.append(text);
+  }
+}
+async function executeShareGroup(planned){
+  await cancelShareMode();requireRunning();
+  const currentStates=await readShareGroup(planned.group),current=selectShareSource(planned.group,currentStates);
+  if(current.conflict)throw new Error('En gruppe har fått ulikt materiell siden planen ble hentet. Ingen videre deling.');
+  for(const old of planned.states){
+    const state=currentStates.find(item=>shareRecordKey(item.record)===shareRecordKey(old.record));
+    if(!state||state.occupied!==old.occupied||!sameTag(state.value,old.value)||state.signature!==old.signature)throw new Error('Materiellinnholdet har endret seg siden planen ble hentet. Hent planen på nytt.');
+  }
+  if(!current.targets.length)return {shared:0,already:planned.targets.length};
+  if(shareRecordKey(current.source)!==shareRecordKey(planned.source))throw new Error('Kilden i delingsplanen har endret seg. Hent planen på nytt.');
+  let confirmClicked=false;
+  try{
+    await openShareForRecord(planned.source);
+    const wanted=new Set(planned.targets.map(shareRecordKey));
+    const choices=shareTargetInputs();
+    if(choices.some(choice=>choice.input.checked&&!wanted.has(shareRecordKey(choice))))throw new Error('Adpoint har allerede avkryssede Share-valg utenfor planen. Ingen valg ble fjernet eller bekreftet.');
+    for(const target of planned.targets){
+      requireRunning();
+      const matches=shareTargetInputs().filter(choice=>shareRecordKey(choice)===shareRecordKey(target));
+      if(matches.length!==1)throw new Error(`Placeholder ${target.placeholder} er ikke et entydig Share-mål for denne kilden.`);
+      const choice=matches[0];
+      if(choice.size!==planned.source.size||(choice.variant||null)!==(planned.source.variant||null)||(choice.side||null)!==(planned.source.side||null)||isDisabled(choice.input))throw new Error('Adpoint tilbyr ikke målplassen som et kompatibelt Share-valg.');
+      if(!choice.input.checked){choice.input.click();if(!await waitFor(()=>shareTargetInputs().find(item=>shareRecordKey(item)===shareRecordKey(target))?.input.checked,2500,70))throw new Error('Share-avkryssingen festet seg ikke.');}
+    }
+    requireRunning();
+    const controls=await waitFor(()=>{const value=getShareControls();return value&&!isDisabled(value.confirm)?value:null;},4000,80);
+    const checked=shareTargetInputs().filter(choice=>choice.input.checked);
+    if(!controls||controls.count!==wanted.size||checked.length!==wanted.size||checked.some(choice=>!wanted.has(shareRecordKey(choice))))throw new Error('Share-valgene samsvarer ikke med planen. Ingen bekreftelse ble sendt.');
+    controls.confirm.click();confirmClicked=true;
+    const closed=await waitFor(()=>{
+      const error=visibleAdpointError();if(error)throw new Error('Adpoint avviste Share: '+error.textContent.trim().slice(0,200));
+      return !getShareControls();
+    },15000,90);
+    if(!closed)throw new UncertainMutationError('Share ble sendt, men avslutningen kunne ikke bekreftes. Ingen automatisk gjentakelse.');
+    await waitForIdle(15000);
+    return {shared:planned.targets.length,already:0};
+  }catch(error){if(confirmClicked&&!(error instanceof UncertainMutationError))throw new UncertainMutationError(error.message+' Kontroller Share-resultatet i Adpoint.');throw error;}
+  finally{if(!confirmClicked)await cancelShareMode();}
+}
+btnShare.onclick=()=>withJob(sharePlan?.total?'Deler materiell…':'Finner delinger…',async()=>{
+  const ids=selectedIds();if(ids.length<2)throw new Error('Velg minst to annonselinjer for å dele mellom dem.');
+  if(!sharePlan||sharePlan.scope!==shareScopeKey()||!sharePlan.total){
+    sharePlan=await buildSharePlan(ids);renderSharePlan();
+    if(!sharePlan.total)app.lastNotice=sharePlan.conflicts.length?'Ingen grupper kan deles automatisk fordi eksisterende materiell er ulikt.':'Ingen nye Share-koblinger funnet mellom valgte linjer.';
+    else LOG(`Delingsplan: ${sharePlan.total} koblinger. Se «Vis koblingene» før du utfører delingen.`);
+    return;
+  }
+  const plan=sharePlan,stats={items:ids.length,done:0,shared:0,err:0,uncertain:0};
+  sharePlan=null;setInfo(stats);
+  try{
+    for(const group of plan.groups){
+      requireRunning();const result=await executeShareGroup(group);stats.shared+=result.shared;setInfo(stats);
+      LOG(`✓ Share: ${group.group.size}, plass ${group.group.slot}, fra ${group.source.line}/${group.source.placeholder} til ${group.targets.map(record=>record.line+'/'+record.placeholder).join(', ')} — ${result.shared} koblinger bekreftet i grensesnittet.`);
+    }
+    stats.done=ids.length;app.lastNotice=`${stats.shared} Share-koblinger utført i Adpoint.`;showToast('Share utført',app.lastNotice);
+  }catch(error){if(error.uncertain)stats.uncertain++;else if(!stopping)stats.err++;throw error;}
+  finally{setInfo(stats);await refreshAfterMutation(ids);renderSharePlan();}
+});
+
+
 /* ========= simple task-based interface ========= */
 (function simplifyInterface(){
   ui.classList.add('ap-simple');
@@ -1713,7 +1915,8 @@ async function verifySubmittedWrites(receipts,stats,timeout=30000){
   const taskSwitch=make('div','','ep-mode');taskSwitch.setAttribute('role','group');taskSwitch.setAttribute('aria-label','Hva vil du gjøre?');
   const fillMode=make('button','Scripts og bilder');fillMode.type='button';fillMode.setAttribute('aria-controls','ep-fill-card');
   const emptyMode=make('button','Tomme materiellplasser');emptyMode.type='button';emptyMode.setAttribute('aria-controls','ep-empty-card');
-  taskSwitch.append(fillMode,emptyMode);
+  const shareMode=make('button','Del materiell');shareMode.type='button';shareMode.setAttribute('aria-controls','ep-share-card');
+  taskSwitch.append(fillMode,emptyMode,shareMode);
 
   const scanCard=make('section','','ep-card');
   const scanRow=make('div','','ep-row');
@@ -1758,14 +1961,14 @@ async function verifySubmittedWrites(receipts,stats,timeout=30000){
   const action=make('div','','ep-action');
   const policy=make('div','','ep-policy');
   const status=make('div','Start med å hente annonsene fra Adpoint.','ep-status');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
-  action.append(policy,btnRun,btnBulk,btnStop,status);
+  action.append(policy,btnRun,btnBulk,btnShare,btnStop,status);
   btnBulk.style.cssText=btnRun.style.cssText;
   btnStop.style.cssText='cursor:pointer;border:1px solid #a84d52;border-radius:8px;padding:8px 12px;background:#4c222a;color:#ffe4e8;font-weight:600';
   const diagnostics=make('details');const diagnosticsSummary=make('summary','Vis detaljer');
   info.style.cssText='display:block;font-size:11px;color:#9ba8ba;padding:0 0 7px';
   log.style.cssText='max-height:180px;overflow:auto;background:#0b0e14;border:1px solid #303644;border-radius:7px;padding:9px;font:11px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere';
   diagnostics.append(diagnosticsSummary,info,log);
-  body.replaceChildren(taskSwitch,scanCard,fillCard,bulk,options,action,diagnostics);
+  body.replaceChildren(taskSwitch,scanCard,fillCard,bulk,shareCard,options,action,diagnostics);
   let mode='fill';
   refreshSimpleUI=()=>{
     syncBulkSelection();
@@ -1774,7 +1977,10 @@ async function verifySubmittedWrites(receipts,stats,timeout=30000){
     let images=0;imagePool.forEach(items=>images+=items.length);
     const imports=mapping.length+images;
     fillMode.setAttribute('aria-pressed',String(mode==='fill'));emptyMode.setAttribute('aria-pressed',String(mode==='empty'));
-    fillMode.disabled=app.busy;emptyMode.disabled=app.busy;
+    fillMode.disabled=app.busy;emptyMode.disabled=app.busy;shareMode.disabled=app.busy;
+    shareMode.setAttribute('aria-pressed',String(mode==='share'));hidden(shareCard,mode!=='share');hidden(btnShare,mode!=='share');
+    if(sharePlan&&sharePlan.scope!==shareScopeKey())invalidateSharePlan();renderSharePlan();
+    btnShare.textContent=sharePlan?.total?`Utfør ${sharePlan.total} ${sharePlan.total===1?'deling':'delinger'}`:'Finn delinger';btnShare.disabled=app.busy||count<2;
     hidden(fillCard,mode!=='fill');hidden(bulk,mode!=='empty');hidden(options,mode!=='fill');
     hidden(btnRun,mode!=='fill');hidden(btnBulk,mode!=='empty');hidden(btnStop,!app.busy);
     hidden(selectionDetails,!scanned.length);hidden(importedRow,!imports);
@@ -1795,17 +2001,18 @@ async function verifySubmittedWrites(receipts,stats,timeout=30000){
     else if(app.lastNotice&&!app.busy){status.textContent=app.lastNotice;status.style.color='#ffd291';}
     else if(app.busy){
       const progress=app.lastStats;
-      status.textContent=stopping?'Stopper etter pågående steg…':(app.jobLabel||'Arbeider…')+(app.phase==='verify'&&progress?.submitted?' · '+progress.saved+' av '+progress.submitted+' bekreftet':progress?.submitted?' · '+progress.submitted+' sendt':progress?.added?' · '+progress.added+' plasser opprettet':'');status.style.color='#a9cff3';
+      status.textContent=stopping?'Stopper etter pågående steg…':(app.jobLabel||'Arbeider…')+(app.phase==='verify'&&progress?.submitted?' · '+progress.saved+' av '+progress.submitted+' bekreftet':progress?.submitted?' · '+progress.submitted+' sendt':progress?.shared?' · '+progress.shared+' delinger':progress?.added?' · '+progress.added+' plasser opprettet':'');status.style.color='#a9cff3';
     }
     else if(app.lastStats&&((app.lastStats.saved||0)+(app.lastStats.added||0)+(app.lastStats.err||0)+(app.lastStats.uncertain||0)>0)){
       const result=app.lastStats;status.textContent=[result.saved?`${result.saved} materiell lagret`:null,result.added?`${result.added} nye plasser`:null,result.err?`${result.err} feil`:null,result.uncertain?`${result.uncertain} usikre endringer`:null].filter(Boolean).join(' · ');status.style.color='#b4dec7';
     }else{
-      status.style.color='#a9b3c4';status.textContent=!scanned.length?'Start med å hente annonsene fra Adpoint.':!count?'Velg minst én annonselinje.':mode==='empty'?'Velg størrelse og antall nye plasser.':!imports?'Velg fil eller lim inn scripts for å fortsette.':'Klar. Materiellet sendes etter tur og kontrolleres samlet til slutt.';
+      status.style.color='#a9b3c4';status.textContent=!scanned.length?'Start med å hente annonsene fra Adpoint.':!count?'Velg minst én annonselinje.':mode==='empty'?'Velg størrelse og antall nye plasser.':mode==='share'?(count<2?'Velg minst to linjer for å dele mellom dem.':sharePlan?.total?'Delingsplanen er klar. Se koblingene og utfør delingen.':'Finn delinger for å koble samme plassnummer mellom linjene.'):!imports?'Velg fil eller lim inn scripts for å fortsette.':'Klar. Materiellet sendes etter tur og kontrolleres samlet til slutt.';
     }
   };
   fillMode.onclick=()=>{if(app.busy)return;mode='fill';refreshSimpleUI();};
   emptyMode.onclick=()=>{if(app.busy)return;mode='empty';refreshSimpleUI();};
-  app.runSelected=()=>{if(mode==='empty')btnBulk.click();else btnRun.click();};
+  shareMode.onclick=()=>{if(app.busy)return;mode='share';refreshSimpleUI();};
+  app.runSelected=()=>{if(mode==='empty')btnBulk.click();else if(mode==='share')btnShare.click();else btnRun.click();};
   for(const control of [reuseCb,addCb,owCb]){
     const previousChange=control.onchange;
     control.onchange=event=>{previousChange?.(event);refreshSimpleUI();};
