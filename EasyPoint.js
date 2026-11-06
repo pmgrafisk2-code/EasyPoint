@@ -1,20 +1,28 @@
 javascript:(()=>{try{
 /* ============================================================
-   EasyPoint / AdPoint Autofill — CLEAN VERSION
-   - Fjernet duplikat-funksjoner
-   - Standardisert på ensureLineExpanded (chevron) overalt
-   - Litt mindre “waitForIdle” spam i inner-loops (raskere)
-   - Reuse-tekst er mer forklarende + riktig når addExtraSizes er på
+   EasyPoint 2.0 / Adpoint — kontrollert kø og massetillegging
+   - Norsk/engelsk Adpoint, linje- og placeholder-ID ved hvert steg
+   - Én jobb om gangen; stopp/lukk venter på pågående lagring
+   - Legg til antall materiellplasser uten CSV; auto-opprett ved import
+   - Bekreft lagring, bevar eksisterende materiell, ingen blinde gjentakelser
    ============================================================ */
 
 const d=document,w=window;
+const previous=w.__easyPoint;
+if(previous?.busy){ previous.focus?.(); alert('EasyPoint arbeider fortsatt. Stopp jobben og vent før du åpner på nytt.'); return; }
+previous?.destroy?.();
+const life=new AbortController();
+const app={busy:false,closing:false,focus:()=>d.getElementById('ap3p_bar')?.scrollIntoView({block:'nearest'})};
+class UncertainMutationError extends Error {constructor(message){super(message);this.name='UncertainMutationError';this.uncertain=true;}}
+w.__easyPoint=app;
+const listen=(target,type,fn,options={})=>target.addEventListener(type,fn,{...options,signal:life.signal});
 
 /* ========= storage ========= */
-const S=(k,v)=>localStorage.setItem(k,JSON.stringify(v));
+const S=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));return true}catch{return false}};
 const G=(k,f)=>{try{return JSON.parse(localStorage.getItem(k))??f}catch{return f}};
 
 /* ========= small utils ========= */
-const vis=el=>!!(el&&(el.offsetParent||(el.getClientRects&&el.getClientRects().length)));
+const vis=el=>!!(el?.isConnected && !el.closest('[hidden]') && el.getClientRects().length && getComputedStyle(el).display!=='none' && getComputedStyle(el).visibility!=='hidden');
 const cs=s=>String(s||'').toLowerCase().replace(/\s+/g,'').replace(/×/g,'x');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function waitFor(fn,ms=6000,step=100){
@@ -30,8 +38,7 @@ function parseSizeVariant(s){
   const m=str.match(/(\d{2,4})\s*[x×]\s*(\d{2,4})/i);
   if(!m) return{size:'',variant:null};
   const size=`${m[1]}x${m[2]}`;
-  const tail=str.slice(m.index+m[0].length);
-  const v=(tail.match(/desktop|mobil|mobile/i)||[''])[0].toLowerCase();
+  const v=(str.match(/desktop|mobil|mobile/i)||[''])[0].toLowerCase();
   const variant=v.includes('desk')?'desktop':(v?'mobil':null);
   return{size,variant};
 }
@@ -59,42 +66,7 @@ function extractLineIds(str){
   return [...ids];
 }
 
-async function waitConfirmUIHealthy(){
-  // kort idle, ikke tung
-  await waitForIdle(8000);
-  // hvis vi ikke er i campaign view og ikke har infopanel, gjør en myk reset
-  const panel = d.querySelector('#InfoPanelContainer');
-  if(!inCampaignTableView() && !panel){
-    await ensureCampaignView();
-    await waitForIdle(12000);
-  }
-}
-
-async function openAddSizeMenuForRow(row){
-  const btn = [...row.querySelectorAll('button')]
-    .find(b => /Legg til valgfri materiell/i.test(b.textContent||''));
-  if(!btn) return null;
-  btn.click();
-  // menyen er en "dropdown---dropdown-menu" i DOM (se HTML)
-  return await waitFor(()=> d.querySelector('[role="menu"].dropdown---dropdown-menu---1fkH0'), 1500, 60);
-}
-
-function readSizesFromMenu(menu){
-  return [...menu.querySelectorAll('[role="menuitem"]')]
-    .map(mi => (mi.textContent||'').trim())
-    .filter(Boolean);
-}
-
-async function getAllowedAddSizesForLine(row){
-  const menu = await openAddSizeMenuForRow(row);
-  if(!menu) return [];
-  const sizes = readSizesFromMenu(menu);
-  // lukk meny (klikk utenfor)
-  d.body.click();
-  await sleep(60);
-  return sizes;
-}
-
+// Line readiness is checked before each operation.
 
 /* ========= detect side ========= */
 function detectSide(str){
@@ -122,30 +94,17 @@ function isTileSelected(tile){
   return false;
 }
 async function selectTile(tile){
-  if(!tile) return false;
+  if(!tile?.isConnected) return false;
   if(isTileSelected(tile)) return true;
-
-  const targets=tileClickTargets(tile);
-  for(let attempt=0; attempt<3; attempt++){
-    for(const t of targets){
-      if(isTileSelected(tile)) return true;
-      try{t.scrollIntoView({block:'center'})}catch{}
-      t.dispatchEvent(new MouseEvent('pointerdown',{bubbles:true}));
-      t.dispatchEvent(new MouseEvent('mousedown', {bubbles:true}));
-      t.dispatchEvent(new MouseEvent('mouseup',   {bubbles:true}));
-      t.click();
-      for(let i=0;i<10;i++){ await sleep(80); if(isTileSelected(tile)) return true; }
-    }
-    try{
-      tile.scrollIntoView({block:'center'});
-      tile.focus?.();
-      tile.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,key:' '}));
-      tile.dispatchEvent(new KeyboardEvent('keyup',  {bubbles:true,key:' '}));
-    }catch{}
-    for(let i=0;i<8;i++){ await sleep(90); if(isTileSelected(tile)) return true; }
+  for(const target of tileClickTargets(tile)){
+    if(!target.isConnected) return false;
+    target.scrollIntoView({block:'center'});
+    target.click();
+    if(await waitFor(()=>tile.isConnected&&isTileSelected(tile),1000,70)) return true;
   }
-  return isTileSelected(tile);
+  return false;
 }
+
 function getAllTiles(details){
   let tiles=[...details.querySelectorAll('.set-creativeTile, .set-creativeTile__selected')];
   // filter nested duplicates
@@ -160,17 +119,35 @@ function groupLabel(group){
                  group.querySelector('.set-cardLabel__main'));
   return (n?.getAttribute?.('title')||n?.textContent||'')||'';
 }
-function tileVariant(tile){
-  const lbl=groupLabel(tileGroup(tile)).toLowerCase();
-  if(/desktop/.test(lbl))return'desktop';
-  if(/mobil|mobile/.test(lbl))return'mobil';
+function tileOwnLabel(tile){
+  const n=tile?.querySelector('.set-cardLabel__main [title],.set-cardLabel__main');
+  return n?.getAttribute('title')||n?.textContent||'';
+}
+function dataRowForTile(tile){
+  let row=tile?.closest('tr');
+  while(row&&!row.matches('tr.set-matSpecDataRow')) row=row.previousElementSibling;
+  return row||null;
+}
+function rowVariant(row){
+  const headers=[...(row?.closest('table')?.tHead?.querySelectorAll('th')||[])];
+  const index=headers.findIndex(th=>/module size|modul|format/i.test(th.textContent||''));
+  const text=row?.children[index]?.textContent||'';
+  if(/desktop/i.test(text)) return 'desktop';
+  if(/mobil|mobile/i.test(text)) return 'mobil';
   return null;
 }
-function tileSide(tile){return detectSide(groupLabel(tileGroup(tile)))}
+function tileVariant(tile){
+  const labels=tileOwnLabel(tile);
+  if(/desktop/i.test(labels)) return 'desktop';
+  if(/mobil|mobile/i.test(labels)) return 'mobil';
+  return rowVariant(dataRowForTile(tile));
+}
+function tileSide(tile){return detectSide(tileOwnLabel(tile))}
+
 function tileHasSize(tile,size){
   const rx=new RegExp(`\\b${String(size).replace('x','[x×]')}\\b`,'i');
   if(rx.test((tile.innerText||'')))return true;
-  const lbl=groupLabel(tileGroup(tile));
+  const lbl=tileOwnLabel(tile);
   const mappedRe=new RegExp(`mapped_${String(size).replace('x','[x×]')}(?:\\b|[_-])`,'i');
   if(mappedRe.test(lbl))return true;
   if(rx.test(lbl))return true;
@@ -203,7 +180,7 @@ function sizesFromExpanded(details){
 
   for(const tile of tiles){
     const text=(tile.innerText||'');
-    const lbl=groupLabel(tileGroup(tile));
+    const lbl=tileOwnLabel(tile);
     let size=findSizeInText(text);
     if(!size) size=findSizeInMapped(lbl);
     if(!size) size=findSizeInText(lbl);
@@ -222,72 +199,61 @@ function pickTilesForEntry(details,entry){
 }
 
 /* ========= virtualized list: mount all tiles ========= */
-async function ensureAllTilesMounted(root = d) {
-  const scroller =
-    root.querySelector('.set-creativeSectionContainer') ||
-    root.querySelector('.set-creativeContainer') ||
-    root.querySelector('[class*="creativeSectionContainer"]') ||
-    root.querySelector('[class*="creativeContainer"]') ||
-    d.scrollingElement;
-
-  if (!scroller) return;
-
-  const countTiles = () =>
-    (root || d).querySelectorAll('.set-creativeTile, .set-creativeTile__selected').length;
-
-  let prev = -1, still = 0;
-  let delay = 80; // start raskt
-
-  for (let i = 0; i < 32 && still < 3; i++) {
-    scroller.scrollBy(0, 1e6);
-    await sleep(delay);
-
-    const count = countTiles();
-    if (count === prev) {
-      still++;
-      delay = Math.min(420, delay + 60); // backoff hvis ingenting skjer
-    } else {
-      prev = count;
-      still = 0;
-      delay = 80; // reset når vi ser progresjon
+async function ensureAllTilesMounted(root=d){
+  // Only scroll real overflowing containers. Re-read cards after scrolling.
+  const scrollers=[root,...root.querySelectorAll('.set-creativeSectionContainer,.set-creativeContainer')]
+    .filter(el=>el.scrollHeight>el.clientHeight+4 && /auto|scroll/.test(getComputedStyle(el).overflowY));
+  for(const el of scrollers){
+    const start=el.scrollTop; let last=-1,stable=0;
+    for(let i=0;i<24&&stable<3;i++){
+      const count=getAllTiles(root).length;
+      el.scrollTop=el.scrollHeight; await sleep(120);
+      stable=count===last?stable+1:0; last=count;
     }
+    el.scrollTop=start;
   }
-
-  scroller.scrollTo(0, 0);
 }
-
 
 /* ========= info panel switching ========= */
-function panelHasSize(size){
-  const want=cs(size);
-  const panel=d.querySelector('#InfoPanelContainer')||d;
-  const txt=cs(panel.innerText||'');
-  return txt.includes(want);
-}
-async function ensurePanelOnSize(size, timeout=1500){
-  // IKKE vent på full idle her – bare poll at panelet faktisk viser riktig størrelse
-  const ok = await waitFor(() => panelHasSize(size), timeout, 60);
-  if(ok) await sleep(60);
-  return !!ok;
-}
+// Panel matching uses the exact placeholder ID, including repeated sizes.
 
-async function ensurePanelSwitchedToTile(tile, timeout=3000){
-  if(!tile) return false;
-  await waitFor(()=>isTileSelected(tile), timeout, 60);
-  await sleep(120);
-  await waitForIdle(8000);
-
+function labelledId(root,label){
+  if(!root) return null;
+  for(const el of root.querySelectorAll('span,div,label,dt')){
+    if(el.children.length || !label.test((el.textContent||'').trim())) continue;
+    let parent=el.parentElement;
+    for(let depth=0;parent&&depth<3;depth++,parent=parent.parentElement){
+      const remainder=(parent.textContent||'').replace(el.textContent,'').trim();
+      const match=remainder.match(/^[:\s-]*(\d{5,12})(?!\d)/);
+      if(match) return match[1];
+    }
+  }
+  return null;
+}
+function placeholderId(tile){
+  const input=tile?.querySelector('input[type="file"][id^="dropzone-"]');
+  const id=input?.id.match(/-(\d+)$/)?.[1];
+  return id||labelledId(tile,/^(?:placeholder\s*id|plassholder[- ]?id|materiellplass[- ]?id)$/i);
+}
+function panelIdentity(){
+  const panel=d.querySelector('#InfoPanelContainer');
+  return {
+    placeholder:labelledId(panel,/^(?:placeholder\s*id|plassholder[- ]?id|materiellplass[- ]?id)$/i),
+    line:labelledId(panel,/^(?:line\s*item|linje[- ]?(?:id|nummer))$/i)
+  };
+}
+async function ensurePanelSwitchedToTile(tile,timeout=6000){
+  const expected=placeholderId(tile);
+  if(!expected||!tile?.isConnected) return false;
   const ok=await waitFor(()=>{
-    const sel=
-      d.querySelector('.set-creativeTile__selected')||
-      d.querySelector('.set-creativeTile[aria-selected="true"]')||
-      d.querySelector('[aria-selected="true"] .set-creativeTile');
-    return sel && (sel===tile || sel.contains(tile) || tile.contains(sel));
-  }, timeout, 60);
-
-  await sleep(120);
-  return !!ok;
+    const identity=panelIdentity();
+    return tile.isConnected&&isTileSelected(tile)&&identity.placeholder===expected;
+  },timeout,90);
+  if(!ok) return false;
+  await waitForIdle(12000);
+  return panelIdentity().placeholder===expected;
 }
+
 
 /* ========= 3rd-party tab (FAST + stable) ========= */
 function getThirdPartyPanel(){
@@ -296,35 +262,22 @@ function getThirdPartyPanel(){
 }
 
 function clickThirdPartyTab(){
-  const tab = [...d.querySelectorAll('[role="tab"],button,a')]
+  const tab = [...d.querySelectorAll('#InfoPanelContainer [role="tab"]')]
     .find(el => /THIRD_PARTY_TAG/i.test(el.id||'') || /\b3(?:rd)?\s*party\b|\b3\.\s*party\b/i.test(el.textContent||''));
   tab?.click();
 }
 
 async function get3PEditorStrict(){
-  // 1) Sørg for at tabpanel finnes (evt. klikk tab)
-  let panel = getThirdPartyPanel();
-  if(!panel || panel.hasAttribute('hidden')){
-    clickThirdPartyTab();
-    panel = await waitFor(()=> {
-      const p = getThirdPartyPanel();
-      if(p && !p.hasAttribute('hidden')) return p;
-      return null;
-    }, 2500, 80);
-  }
-  if(!panel) return null;
-
-  // 2) Finn CodeMirror kun i third-party container
-  const cm = [...panel.querySelectorAll('.third-party .CodeMirror')].find(vis);
-  if(cm) return { kind:'cm', el:cm, panel, cm: cm.CodeMirror };
-
-  // 3) Siste fallback: textarea men kun hvis den ligger INNE i .third-party
-  const ta = [...panel.querySelectorAll('.third-party textarea')].find(vis);
-  if(ta) return { kind:'ta', el:ta, panel };
-
-  return null;
+  clickThirdPartyTab();
+  return await waitFor(()=>{
+    const panel=getThirdPartyPanel();
+    if(!panel||!vis(panel)) return null;
+    const cm=[...panel.querySelectorAll('.third-party .CodeMirror')].find(vis);
+    if(cm?.CodeMirror) return {kind:'cm',el:cm,panel,cm:cm.CodeMirror};
+    const ta=[...panel.querySelectorAll('.third-party textarea')].find(vis);
+    return ta?{kind:'ta',el:ta,panel}:null;
+  },6000,90);
 }
-
 
 function pasteInto(target,value){
   if(!target) return;
@@ -340,42 +293,13 @@ ta.dispatchEvent(new Event('change', { bubbles:true }));
 ta.dispatchEvent(new Event('blur',   { bubbles:true })); // hjelper ofte MUI aktivere lagreknapp
 
 }
-async function clickSaveOrReprocess(scope){
-  const root = scope?.panel || d.querySelector('#InfoPanelContainer') || d;
-
-  const btn = [...root.querySelectorAll('button')]
-    .filter(vis)
-    .find(b => {
-      const txt = (
-        b.textContent ||
-        b.getAttribute('aria-label') ||
-        b.getAttribute('title') ||
-        ''
-      ).toLowerCase();
-
-      return /lagre|save|oppdater|update|send inn på nytt|reprocess/i.test(txt)
-        && !b.disabled
-        && !b.classList.contains('Mui-disabled');
-    });
-
-  if (btn) {
-    btn.scrollIntoView({ block: 'center' });
-    btn.click();
-    await sleep(700);
-    return true;
-  }
-  return false;
-}
-
+// Saving is implemented below with acknowledgement and read-back.
 
 /* ========= verify/retry ========= */
-function normalizeTagForCompare(s){
-  return String(s||'')
-    .replace(/\r\n/g,'\n')
-    .replace(/[ \t]+\n/g,'\n')
-    .replace(/\n{3,}/g,'\n\n')
-    .trim();
+function normalizeTagForCompare(value){
+  return String(value||'').replace(/\r\n/g,'\n').trim();
 }
+
 function getEditorValue(editor){
   if(!editor) return '';
   if(editor.kind==='cm' && editor.cm){
@@ -392,27 +316,65 @@ async function pasteWithVerify(editor,value,tries=2){
     if(editor.kind==='cm'){ try{editor.cm?.refresh?.()}catch{} await sleep(80); }
     const got=normalizeTagForCompare(getEditorValue(editor));
     if(got===want) return true;
-    if(got.replace(/\s+/g,'')===want.replace(/\s+/g,'')) return true;
     await sleep(180);
   }
   return false;
 }
-async function saveWithRetry(editor,tries=2){
-  for(let i=0;i<=tries;i++){
-    const ok=await clickSaveOrReprocess(editor);
-    if(!ok){ await sleep(250); continue; }
-    await waitForIdle(15000);
-    await ensureCampaignView();
-    await waitForIdle(8000);
-    return true;
-  }
-  return false;
+function saveButtons(root){
+  return [...root.querySelectorAll('button')].filter(vis).filter(btn=>{
+    const label=(btn.textContent||btn.getAttribute('aria-label')||btn.title||'').replace(/\s+/g,' ').trim();
+    return /^(?:lagre(?: endringer)?|save(?: changes)?|oppdater|update|send inn på nytt|submit again|resubmit|reprocess)$/i.test(label);
+  });
 }
-async function checkpoint(label=''){
-  await ensureCampaignView();
-  await waitForIdle(15000);
-  if(label) LOG(`   · sjekkpunkt ${label}`);
+function visibleAdpointError(){
+  const nodes=[...d.querySelectorAll('[role="alert"],.MuiAlert-standardError,.MuiAlert-filledError')]
+    .filter(el=>vis(el)&&!el.closest('#ap3p_bar'));
+  return nodes.find(el=>/error|failed|failure|invalid|feil|mislykk|ugyldig/i.test(el.textContent||''))||null;
 }
+function successNotice(){
+  return [...d.querySelectorAll('[role="alert"],.MuiSnackbar-root')].filter(vis)
+    .find(el=>/saved|success|lagret|vellykket|oppdatert|updated/i.test(el.textContent||''))||null;
+}
+async function saveWithRetry(editor,record,expected){
+  // No blind write retries: a timed-out save may already have reached the server.
+  const ready=await waitFor(()=>{
+    const panel=getThirdPartyPanel();
+    const buttons=panel&&saveButtons(panel).filter(btn=>!isDisabled(btn));
+    return buttons?.length===1?buttons[0]:null;
+  },6000,100);
+  if(!ready) throw new Error('Fant ikke én aktiv Lagre/Update-knapp. Scriptet er ikke bekreftet lagret.');
+  assertTarget(record);
+  if(normalizeTagForCompare(getEditorValue(editor))!==normalizeTagForCompare(expected)) throw new Error('Editorinnholdet ble endret før lagring.');
+  if(visibleAdpointError()) throw new Error('Adpoint viser en feil før lagring. Kontroller siden.');
+  const oldNotice=successNotice(); const oldText=oldNotice?.textContent;
+  ready.click();
+  const acknowledged=await waitFor(()=>{
+    const error=visibleAdpointError();
+    if(error) throw new Error('Adpoint avviste lagringen: '+error.textContent.trim().slice(0,200));
+    const notice=successNotice();
+    if(notice&&(notice!==oldNotice||notice.textContent!==oldText)) return true;
+    // Adpoint typically disables or removes the action after accepting the tag.
+    return !ready.isConnected||isDisabled(ready);
+  },15000,100);
+  if(!acknowledged) throw new UncertainMutationError('Lagringen er usikker: ingen kvittering fra Adpoint. Kontroller materiellplassen før ny kjøring.');
+  try{await waitForIdle(15000);}catch(error){throw new UncertainMutationError(error.message+' Lagringen må kontrolleres i Adpoint.');}
+  assertTarget(record);
+  // Remount the editor by leaving and returning to its tab, then read back.
+  const summary=[...d.querySelectorAll('#InfoPanelContainer [role="tab"]')]
+    .find(tab=>/SUMMARY$/i.test(tab.id)||/^(summary|sammendrag|oversikt)$/i.test(tab.textContent.trim()));
+  if(!summary) throw new UncertainMutationError('Lagre ble utført, men kunne ikke åpne sammendrag for etterkontroll. Kontroller Adpoint.');
+  summary.click();
+  if(!await waitFor(()=>!getThirdPartyPanel()||!vis(getThirdPartyPanel()),4000,90)) throw new UncertainMutationError('Kunne ikke forlate editor for etterkontroll.');
+  const readBack=await get3PEditorStrict();
+  if(!readBack) throw new UncertainMutationError('Kunne ikke åpne editor igjen etter lagring.');
+  assertTarget(record);
+  const value=await getEditorValueStable(readBack);
+  if(normalizeTagForCompare(value)!==normalizeTagForCompare(expected)) throw new Error('Etterkontrollen fant et annet script enn det som ble lagret.');
+  const stillDirty=saveButtons(readBack.panel).filter(btn=>!isDisabled(btn)&&/^(lagre(?: endringer)?|save(?: changes)?|oppdater|update)$/i.test(btn.textContent.trim()));
+  if(stillDirty.length&&!successNotice()) throw new UncertainMutationError('Adpoint viser fortsatt ulagrede endringer etter lagring. Kontroller før ny kjøring.');
+  return true;
+}
+
 
 /* ========= empty editor detection ========= */
 function normalizeEditorText(s){
@@ -423,16 +385,16 @@ function normalizeEditorText(s){
     .trim();
 }
 function isEmpty3PValue(v){ return !normalizeEditorText(v).length; }
-async function getEditorValueStable(editor, tries=8, step=120){
-  let last=null;
+async function getEditorValueStable(editor,tries=12,step=120){
+  let last=null,stable=0;
   for(let i=0;i<tries;i++){
-    const v=getEditorValue(editor);
-    if(v && v.trim()) return v;
-    if(v===last && i>=2) return v;
-    last=v;
+    if(!editor.el.isConnected) throw new Error('Editor ble byttet mens innholdet ble lest.');
+    const value=getEditorValue(editor);
+    stable=value===last?stable+1:0; last=value;
+    if(stable>=3) return value;
     await sleep(step);
   }
-  return getEditorValue(editor);
+  throw new Error('Editorinnholdet ble ikke stabilt. Ingen endring utført.');
 }
 
 /* ========= tile already has material? ========= */
@@ -548,25 +510,19 @@ function getHeaderIdxForRow(row){
   let lineItemIdx=-1, rosenrIdx=-1;
   ths.forEach((th,i)=>{
     const t=normLabel(th.textContent);
-    if(lineItemIdx===-1 && /(^|\s)line\s*item(\s|$)/.test(t)) lineItemIdx=i;
-    if(rosenrIdx===-1 && (/rosenr/.test(t) || (/materiell/.test(t)&&/rosenr/.test(t)))) rosenrIdx=i;
+    if(lineItemIdx===-1 && /(^|\s)line\s*item(\s|$)|linje[- ]?(?:id|nummer)/.test(t)) lineItemIdx=i;
+    if(rosenrIdx===-1 && (/rosenr|material number|materiellnummer/.test(t))) rosenrIdx=i;
   });
   table._ap3p_headerIdx={lineItemIdx,rosenrIdx};
   return table._ap3p_headerIdx;
 }
 function rowId(row){
-  const {lineItemIdx,rosenrIdx}=getHeaderIdxForRow(row);
-  const tds=[...row.querySelectorAll('td')];
-  if(lineItemIdx>-1 && tds[lineItemIdx]){
-    const txt=tds[lineItemIdx].textContent.trim();
-    const m=txt.match(/\d{6,10}/);
-    return (m&&m[0])||(txt||'?');
-  }
-  const rosenVal=(rosenrIdx>-1 && tds[rosenrIdx])?tds[rosenrIdx].textContent.trim():'';
-  const nums=tds.map(td=>td.textContent.trim()).filter(t=>/^\d{6,10}$/.test(t));
-  const hit=nums.find(n=>n!==rosenVal);
-  return hit||nums[0]||'?';
+  const {lineItemIdx}=getHeaderIdxForRow(row);
+  const cell=row.children[lineItemIdx];
+  const value=cell?.textContent.trim()||'';
+  return /^\d{6,10}$/.test(value)?value:'?';
 }
+
 function findRowsByIdAll(targetId){return findRows().filter(r=>rowId(r)===targetId)}
 
 /* ========= expand/collapse (standardisert) ========= */
@@ -602,7 +558,7 @@ function getCollapseRowsForDataRow(dataRow){
 async function ensureLineExpanded(dataRow){
   // hvis allerede expanded: returnér alle collapse rows
   let rows=getCollapseRowsForDataRow(dataRow);
-  if(rows.length) return rows;
+  if(rows.some(row=>vis(row.querySelector('.set-matSpecCreativeSection,.set-creativeSectionContainer')))) return rows;
 
   const expBtn=getExpandBtnForDataRow(dataRow);
   if(expBtn){
@@ -612,231 +568,118 @@ async function ensureLineExpanded(dataRow){
 
   rows=await waitFor(()=>{
     const r=getCollapseRowsForDataRow(dataRow);
-    return r.length ? r : null;
+    return r.some(row=>vis(row.querySelector('.set-matSpecCreativeSection,.set-creativeSectionContainer')))?r:null;
   }, 4000, 80);
 
   return rows || [];
 }
 
 
-/* ========= add optional material (dropdown) ========= */
+/* ========= line-scoped optional placeholders, NO/EN ========= */
+const ADD_LABEL=/^(?:legg til valgfri(?:tt)? materiell|add optional creative placeholder)$/i;
 function getAddOptionalBtn(scope){
-  const root=scope||document;
-  const btn=Array.from(root.querySelectorAll('button,[role="button"]'))
-    .filter(vis)
-    .find(b=>/legg til valgfri materiell/i.test((b.innerText||b.textContent||'').trim()));
-  return btn||null;
+  return [...(scope||d).querySelectorAll('button,[role="button"]')]
+    .filter(vis).find(el=>ADD_LABEL.test((el.textContent||'').replace(/\s+/g,' ').trim()))||null;
 }
-function getaddoptionalBtn(scope){ return getAddOptionalBtn(scope); } // legacy alias
-
-function countTilesInCollapse(collapseRow){
-  if(!collapseRow) return 0;
-  return collapseRow.querySelectorAll('.set-creativeTile, .set-creativeTile__selected').length;
+function optionalToggle(btn){
+  return btn?.closest('[aria-haspopup]')||btn;
 }
-function countSizeTilesInCollapse(collapseRow,sizeText){
-  if(!collapseRow) return 0;
-  const want=cs(sizeText);
-  const tiles=Array.from(collapseRow.querySelectorAll('.set-creativeTile, .set-creativeTile__selected'));
-  let n=0;
-  for(const t of tiles){ if(tileHasSize(t,want)) n++; }
-  return n;
+function isDisabled(el){
+  return !el||el.disabled||el.getAttribute('aria-disabled')==='true'||el.classList.contains('Mui-disabled')||el.hasAttribute('disabled');
 }
-
-function isVisiblePopup(el){
-  if(!el) return false;
-  const st=getComputedStyle(el);
-  if(st.display==='none' || st.visibility==='hidden') return false;
-  if(el.getAttribute('aria-hidden')==='true') return false;
-  const r=el.getBoundingClientRect();
-  return r.width>2 && r.height>2;
+function dropdownRoot(btn){
+  return btn.closest('[class*="dropdown---dropdown---"]')||btn.parentElement;
 }
-function getPopupCandidates(root=document){
-  return Array.from(root.querySelectorAll([
-    'div[role="menu"]',
-    'div[role="listbox"]',
-    '[role="presentation"] .MuiPaper-root',
-    '.MuiPopover-root .MuiPaper-root',
-    '.MuiMenu-paper',
-    '.MuiPopper-root .MuiPaper-root',
-    'div[class*="dropdown---dropdown-menu---"]',
-    'div[class*="dropdown---menu---"]',
-  ].join(',')));
+function menuForToggle(btn){
+  const controlled=btn.getAttribute('aria-controls');
+  const direct=controlled&&d.getElementById(controlled);
+  if(direct&&vis(direct)) return direct;
+  const local=[...dropdownRoot(btn).querySelectorAll('[role="menu"],[role="listbox"]')].filter(vis);
+  return local.length===1?local[0]:null;
 }
-function pickNearestTo(btn,nodes){
-  if(!btn || !nodes?.length) return null;
-  const br=btn.getBoundingClientRect();
-  const bx=br.left+br.width/2, by=br.top+br.height/2;
-  let best=null,bestD=Infinity;
-  for(const n of nodes){
-    const r=n.getBoundingClientRect();
-    const x=r.left+r.width/2, y=r.top+r.height/2;
-    const d=Math.hypot(x-bx,y-by);
-    if(d<bestD){ bestD=d; best=n; }
-  }
-  return best;
+async function openAddSizeMenuForRow(row){
+  const id=typeof row==='string'?row:rowId(row);
+  const rows=findRowsByIdAll(id);
+  if(rows.length!==1) throw new Error(`Linje ${id}: forventet én entydig rad, fant ${rows.length}.`);
+  const details=await ensureLineExpanded(rows[0]);
+  const buttons=details.map(getAddOptionalBtn).filter(Boolean);
+  if(buttons.length!==1) throw new Error(`Linje ${id}: fant ikke én entydig knapp for valgfritt materiell (norsk/engelsk).`);
+  const btn=optionalToggle(buttons[0]);
+  if(isDisabled(btn)) throw new Error(`Linje ${id}: knappen for materiell er deaktivert.`);
+  if(btn.getAttribute('aria-expanded')==='true'&&menuForToggle(btn)) return {btn,menu:menuForToggle(btn)};
+  const before=new Set([...d.querySelectorAll('[role="menu"],[role="listbox"]')].filter(vis));
+  btn.scrollIntoView({block:'center'}); btn.click();
+  const menu=await waitFor(()=>{
+    const owned=menuForToggle(btn); if(owned) return owned;
+    // Only a newly opened portal, never the geometrically nearest unrelated menu.
+    const fresh=[...d.querySelectorAll('[role="menu"],[role="listbox"]')].filter(el=>vis(el)&&!before.has(el));
+    return fresh.length===1?fresh[0]:null;
+  },5000,90);
+  if(!menu) throw new Error(`Linje ${id}: størrelsesmenyen åpnet seg ikke.`);
+  return {btn,menu};
 }
-function normTxt(s){
-  return String(s||'')
-    .replace(/\u00A0/g,' ')
-    .replace(/\s+/g,' ')
-    .trim()
-    .toLowerCase()
-    .replace(/\s*[x×]\s*/g,'x');
+function readMenuOptions(menu){
+  return [...menu.querySelectorAll('[role="menuitem"],[role="option"]')].filter(vis).map(el=>{
+    const label=(el.textContent||'').replace(/\s+/g,' ').trim();
+    const meta=parseSizeVariant(label);
+    return {el,label,size:cs(meta.size),variant:meta.variant,disabled:isDisabled(el)};
+  }).filter(x=>x.size);
 }
-function doPointerClick(el){
-  if(!el) return;
-  try{el.scrollIntoView({block:'center'})}catch{}
-  el.dispatchEvent(new MouseEvent('pointerdown',{bubbles:true}));
-  el.dispatchEvent(new MouseEvent('mousedown', {bubbles:true}));
-  el.dispatchEvent(new MouseEvent('mouseup',   {bubbles:true}));
-  el.click();
-}
-
-async function addSizeScopedToLine(dataRow,sizeText){
-  const collapseRows = await ensureLineExpanded(dataRow);
-  if(!collapseRows || !collapseRows.length) return {ok:false,reason:"Fant ingen collapse-rad(er) / klarte ikke ekspandere linja"};
-
-  // Velg collapse-raden som faktisk har knappen (ofte siste)
-  let scope = collapseRows.find(r => getAddOptionalBtn(r)) || collapseRows[collapseRows.length - 1];
-
-  const innerBtn=getAddOptionalBtn(scope);
-  if(!innerBtn) return {ok:false,reason:"Fant ikke 'Legg til valgfri materiell'-knapp i linja"};
-
-  const toggleBtn =
-    innerBtn.closest('button[aria-haspopup="true"]') ||
-    innerBtn.closest('[role="button"][aria-haspopup="true"]') ||
-    innerBtn.closest('button');
-
-  if(!toggleBtn) return {ok:false,reason:"Fant ikke dropdown-toggle for 'Legg til valgfri materiell'"};
-
-  const beforeTotal = collapseRows.reduce((a,r)=>a+countTilesInCollapse(r),0);
-const beforeSize  = collapseRows.reduce((a,r)=>a+countSizeTilesInCollapse(r,sizeText),0);
-
-
+async function closeAddMenu(opened){
+  if(!opened) return;
+  const {btn,menu}=opened;
+  if(!vis(menu)) return;
+  if(btn.isConnected&&btn.getAttribute('aria-expanded')==='true') btn.click();
+  else menu.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',bubbles:true}));
   await sleep(80);
-  doPointerClick(toggleBtn);
-
-  let menu=await waitFor(()=>{
-    const cands=getPopupCandidates(document).filter(isVisiblePopup);
-    const picked=pickNearestTo(toggleBtn,cands);
-    if(!picked) return null;
-    const roleMenu=picked.matches?.('[role="menu"],[role="listbox"]')
-      ? picked
-      : picked.querySelector?.('[role="menu"],[role="listbox"]');
-    return roleMenu || picked;
-  },3500,60);
-
-  if(!menu){
-    await sleep(120);
-    doPointerClick(toggleBtn);
-    menu=await waitFor(()=>{
-      const cands=getPopupCandidates(document).filter(isVisiblePopup);
-      const picked=pickNearestTo(toggleBtn,cands);
-      if(!picked) return null;
-      const roleMenu=picked.matches?.('[role="menu"],[role="listbox"]')
-        ? picked
-        : picked.querySelector?.('[role="menu"],[role="listbox"]');
-      return roleMenu || picked;
-    },3500,60);
+  if(vis(menu)){
+    d.body.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));
+    d.body.click(); await sleep(80);
   }
-  if(!menu) return {ok:false,reason:"Meny dukket ikke opp (portal popup ikke funnet)"};
-
-  const want=normTxt(sizeText);
-  const items=Array.from(menu.querySelectorAll('[role="menuitem"],[role="option"]'))
-    .map(el=>({
-      el,
-      t:normTxt(el.innerText||el.textContent||''),
-      disabled:
-        el.getAttribute('aria-disabled')==='true' ||
-        el.classList.contains('Mui-disabled') ||
-        el.hasAttribute('disabled')
-    }))
-    .filter(x=>x.t);
-
-  const hit=items.find(x=>x.t===want) || items.find(x=>x.t.includes(want));
-  if(!hit){
-    try{document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))}catch{}
-    const all=items.map(x=>x.t).slice(0,30).join(', ');
-    return {ok:false,reason:`Fant ikke '${sizeText}' i menyen. Fantes: ${all||'(ingen)'}`};
-  }
-  if(hit.disabled){
-    return {ok:false,reason:`'${sizeText}' er disabled i menyen (AdPoint tillater trolig ikke flere av samme størrelse akkurat nå)`};
-  }
-
-  doPointerClick(hit.el);
-  await waitForIdle(12000);
-  await sleep(250);
-
-  const ok = await waitFor(() => {
-  const nowTotal = collapseRows.reduce((a,r)=>a + countTilesInCollapse(r), 0);
-  const nowSize  = collapseRows.reduce((a,r)=>a + countSizeTilesInCollapse(r, sizeText), 0);
-  return (nowSize >= beforeSize + 1) || (nowTotal >= beforeTotal + 1);
-}, 7000, 80);
-
-if (!ok) {
-  const nowSize = collapseRows.reduce((a,r)=>a + countSizeTilesInCollapse(r, sizeText), 0);
-  return { ok:false, reason:`Klikk utført, men ingen ny tile ble lagt til (før=${beforeSize}, nå=${nowSize}).` };
 }
-
-
-  return {ok:true};
+async function getAllowedAddSizesForLine(row){
+  let opened;
+  try{
+    opened=await openAddSizeMenuForRow(row);
+    const id=typeof row==='string'?row:rowId(row);
+    const lineVariant=rowVariant(findRowsByIdAll(id)[0]);
+    return readMenuOptions(opened.menu).filter(x=>!x.disabled).map(({size,variant,label})=>({size,variant:variant||lineVariant,label}));
+  }
+  finally{await closeAddMenu(opened);}
 }
-
-/* ========= pools ========= */
-function buildTagPools(mapping){
-  const tagsByExactGlobal=new Map();
-  const tagsBySizeGlobal =new Map();
-  const tagsByExactLine  =new Map();
-  const tagsBySizeLine   =new Map();
-
-  const keyExact=(lineId,size,variant)=>(lineId?`${lineId}|`:'')+`${size}|${variant||''}`;
-  const keySize =(lineId,size)=>(lineId?`${lineId}|`:'')+size;
-
-  let lineScopedCount=0, globalCount=0;
-
-  for(const m of (mapping||[])){
-    const ids=Array.isArray(m.lineIds)?m.lineIds.filter(Boolean):[];
-    const payload={tag:m.tag,name:m.name||''};
-
-    if(ids.length){
-      for(const lid of ids){
-        const k1=keyExact(lid,m.size,m.variant||null);
-        const k2=keySize(lid,m.size);
-        if(!tagsByExactLine.has(k1)) tagsByExactLine.set(k1,[]);
-        if(!tagsBySizeLine.has(k2))  tagsBySizeLine.set(k2,[]);
-        tagsByExactLine.get(k1).push(payload);
-        tagsBySizeLine.get(k2).push(payload);
-        lineScopedCount++;
-      }
-    }else{
-      const k1=`${m.size}|${m.variant||''}`;
-      const k2=m.size;
-      if(!tagsByExactGlobal.has(k1)) tagsByExactGlobal.set(k1,[]);
-      if(!tagsBySizeGlobal.has(k2))  tagsBySizeGlobal.set(k2,[]);
-      tagsByExactGlobal.get(k1).push(payload);
-      tagsBySizeGlobal.get(k2).push(payload);
-      globalCount++;
+async function addSizeScopedToLine(line,sizeText,variant=null,exactLabel=null){
+  const id=typeof line==='string'?line:rowId(line);
+  let opened;
+  const before=await recordsForLine(id);
+  const previousIds=new Set(before.map(x=>x.placeholder));
+  if(before.some(x=>!x.placeholder)) throw new Error('Kan ikke bekrefte eksisterende placeholder-ID-er. Ingen tillegging utført.');
+  try{
+    opened=await openAddSizeMenuForRow(id);
+    let choices=readMenuOptions(opened.menu).filter(x=>x.size===cs(sizeText)&&!x.disabled);
+    if(exactLabel) choices=choices.filter(x=>x.label===exactLabel);
+    else if(variant){
+      const exact=choices.filter(x=>x.variant===variant);
+      if(exact.length) choices=exact;
+      else choices=choices.filter(x=>!x.variant);
     }
-  }
-
-  const hasLineIds=lineScopedCount>0;
-  LOG(`CSV map: linje=${lineScopedCount}, global=${globalCount}`);
-
-  return {
-    hasLineIds,
-    kExact:keyExact,
-    kSize:keySize,
-    getExact(lineId,size,variant){
-      const kLine=keyExact(lineId,size,variant||null);
-      const kGlob=`${size}|${variant||''}`;
-      return (tagsByExactLine.get(kLine) || tagsByExactGlobal.get(kGlob) || []);
-    },
-    getSize(lineId,size){
-      const kLine=keySize(lineId,size);
-      return (tagsBySizeLine.get(kLine) || tagsBySizeGlobal.get(size) || []);
+    if(choices.length!==1) throw new Error(`Linje ${id}: størrelsen ${sizeText}${variant?'/'+variant:''} er utilgjengelig eller tvetydig.`);
+    choices[0].el.click();
+    // Mutation has happened. Never repeat this click after an ambiguous timeout.
+    try{await waitForIdle(15000);}catch(error){throw new UncertainMutationError(error.message+' Tilleggingen må kontrolleres i Adpoint.');}
+    const start=Date.now();
+    while(Date.now()-start<12000){
+      const now=await recordsForLine(id);
+      const fresh=now.filter(x=>!previousIds.has(x.placeholder));
+      if(fresh.length===1&&fresh[0].size===cs(sizeText)&&(!variant||fresh[0].variant===variant)) return fresh[0];
+      if(fresh.length>0) throw new Error(`Linje ${id}: endringen ga uventet størrelse eller antall. Kontroller Adpoint før ny kjøring.`);
+      await sleep(150);
     }
-  };
+    throw new UncertainMutationError(`Linje ${id}: tillegging er usikker. Ingen automatisk gjentakelse; kontroller Adpoint.`);
+  }finally{await closeAddMenu(opened);}
 }
+
+
+// Script sources are grouped by line and variant in workGroups below.
 
 /* ========= image pool ========= */
 let imagePool=new Map(); // key `${size}|${side||''}` -> [File,...]
@@ -875,44 +718,49 @@ function fileName(f){return (f&&f.name)?f.name:'(fil)'}
 
 /* ========= upload image to tile ========= */
 function getTileDropzoneInput(tile){return tile.querySelector('input[type="file"]')||null}
-async function confirmReplaceIfPrompted(timeout=5000){
-  const dlg=await waitFor(()=>{
-    const el=d.querySelector('.MuiDialog-container, .MuiDialog-root, [role="dialog"]');
-    if(!el) return null;
-    const txt=(el.innerText||'').toLowerCase();
-    if(/(bekreftelse|erstatte|erstatt|overwrite|replace|confirm)/.test(txt)) return el;
-    return null;
-  },timeout,120);
+async function confirmReplaceIfPrompted(timeout=1200){
+  const dlg=await waitFor(()=>[...d.querySelectorAll('[role="dialog"]')].filter(vis)
+    .find(el=>/erstatte|erstatt|overwrite|replace/i.test(el.textContent||'')),timeout,100);
   if(!dlg) return false;
-
-  const btns=[...dlg.querySelectorAll('button')];
-  const isOK=b=>/^(ok|ja|fortsett|erstatte|erstatt|update|replace|confirm)$/i.test((b.innerText||'').trim());
-  const okBtn=btns.find(isOK) || btns.at(-1);
-  if(okBtn){
-    okBtn.scrollIntoView({block:'center'});
-    okBtn.click();
-    await sleep(200);
-    return true;
-  }
-  return false;
+  const buttons=[...dlg.querySelectorAll('button')].filter(vis)
+    .filter(btn=>!isDisabled(btn)&&/^(ok|ja|yes|fortsett|continue|erstatte|erstatt|replace|confirm|bekreft)$/i.test(btn.textContent.trim()));
+  if(buttons.length!==1) throw new Error('Ukjent bekreftelsesdialog. Ingen knapp ble valgt automatisk.');
+  buttons[0].click(); return true;
 }
-async function uploadImageToTile(tile,file){
-  const inp=getTileDropzoneInput(tile);
-  if(!inp) return false;
-  const dt=new DataTransfer();
-  dt.items.add(file);
-  inp.files=dt.files;
-  inp.dispatchEvent(new Event('input',{bubbles:true}));
+function materialSignature(tile){
+  const media=[...tile.querySelectorAll('img,.MuiCardMedia-root,[class*="CardMedia"]')]
+    .map(el=>el.currentSrc||el.src||getComputedStyle(el).backgroundImage||'').join('|');
+  return media;
+}
+async function uploadImageToTile(record,file){
+  const current=await getFreshRecord(record.line,record.placeholder);
+  if(!current) throw new Error('Materiellplassen for bildet finnes ikke lenger.');
+  if(!await selectTile(current.tile)||!await ensurePanelSwitchedToTile(current.tile)) throw new Error('Kunne ikke velge riktig materiellplass for bildet.');
+  assertTarget(current);
+  const inp=getTileDropzoneInput(current.tile);
+  if(!inp) throw new Error('Fant ikke filopplasting på valgt materiellplass.');
+  const before=materialSignature(current.tile);
+  const dt=new DataTransfer(); dt.items.add(file); inp.files=dt.files;
+  // Dropzone handles change; dispatching both input and change can start two uploads.
   inp.dispatchEvent(new Event('change',{bubbles:true}));
-  await sleep(200);
-  await confirmReplaceIfPrompted(5000);
-  await sleep(250);
-  return true;
+  await confirmReplaceIfPrompted(1800);
+  try{await waitForIdle(20000);}catch(error){throw new UncertainMutationError(error.message+' Bildeopplastingen må kontrolleres i Adpoint.');}
+  const start=Date.now();
+  while(Date.now()-start<20000){
+    const error=visibleAdpointError();
+    if(error) throw new Error('Bildeopplasting feilet: '+error.textContent.trim().slice(0,200));
+    const now=await getFreshRecord(record.line,record.placeholder);
+    if(now&&tileHasMaterial(now.tile)&&materialSignature(now.tile)!==before) return true;
+    await sleep(180);
+  }
+  throw new UncertainMutationError('Bildeopplastingen er usikker: ny forhåndsvisning ble ikke bekreftet. Kontroller Adpoint.');
 }
+
 
 /* ========= UI ========= */
 (function injectCSS(){
-  const st=d.createElement('style');
+  d.getElementById('ap3p_style')?.remove();
+  const st=d.createElement('style'); st.id='ap3p_style';
   st.textContent=`
 #ap3p_bar{box-sizing:border-box}
 #ap3p_list .item{display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:6px}
@@ -971,7 +819,7 @@ ui.style.cssText='position:fixed;right:16px;bottom:16px;z-index:2147483647;backg
 
 const hdr=d.createElement('div');
 hdr.style.cssText='cursor:move;user-select:none;display:flex;align-items:center;gap:10px;padding:8px 10px;background:#161922;border-radius:12px 12px 0 0;border-bottom:1px solid #2a2d37';
-const title=d.createElement('div'); title.textContent='EasyPoint';
+const title=d.createElement('div'); title.textContent='EasyPoint 2.0';
 const badge=d.createElement('span'); badge.style.opacity='.8'; badge.style.marginLeft='6px'; badge.textContent='';
 const mapChip=d.createElement('span'); mapChip.className='chip chip-none';
 const mapClear=d.createElement('button'); mapClear.textContent='×'; mapClear.title='Tøm mapping'; mapClear.style.cssText='margin-left:4px;border:1px solid #2a2d37;background:#1a1d27;color:#e6e6e6;width:22px;height:22px;border-radius:6px;cursor:pointer';
@@ -1004,7 +852,7 @@ const log=d.createElement('div'); log.style.cssText='height:200px;overflow:auto;
 ui.append(hdr,body,listWrap,log); d.body.appendChild(ui);
 
 const LOG=m=>{log.textContent+=m+'\n'; log.scrollTop=log.scrollHeight;};
-const setInfo=o=>{info.textContent=`Linjer:${o.items}  Ferdig:${o.done}  Treff:${o.hit}  Hoppet:${o.skip}  Feil:${o.err}`};
+const setInfo=o=>{info.textContent=`Linjer:${o.items}  Ferdig:${o.done}  Lagret:${o.saved||0}  Nye:${o.added||0}  Hoppet:${o.skip||0}  Feil:${o.err||0}  Usikkert:${o.uncertain||0}`};
 body.append(info,btnCSV,btnPaste,file,drop);
 
 /* ===== Apply saved UI state ===== */
@@ -1065,24 +913,24 @@ function adjustHeights(totalH){
   const pad=24;
   const logH=Math.max(110,totalH-(hdrH+bodyH+lstH+pad));
   log.style.height=logH+'px';
-  ui.style.overflow='hidden';
+  ui.style.overflow='auto';
 }
 (function makeDraggable(handle,box){
   let sx=0,sy=0,ox=0,oy=0,drag=false;
   handle.addEventListener('pointerdown',e=>{
-    if(e.button!==0) return;
+    if(e.button!==0 || e.target.closest('button,input,select')) return;
     drag=true;
     const r=box.getBoundingClientRect();
     ox=r.left; oy=r.top; sx=e.clientX; sy=e.clientY;
     box.style.left=ox+'px'; box.style.top=oy+'px';
     box.style.right='auto'; box.style.bottom='auto';
   });
-  w.addEventListener('pointermove',e=>{
+  listen(w,'pointermove',e=>{
     if(!drag)return;
     box.style.left=(ox+e.clientX-sx)+'px';
     box.style.top =(oy+e.clientY-sy)+'px';
   });
-  w.addEventListener('pointerup',()=>{
+  listen(w,'pointerup',()=>{
     if(drag){ drag=false; saveUIState(); }
   });
 })(hdr,ui);
@@ -1096,8 +944,8 @@ function adjustHeights(totalH){
     e.preventDefault();
     const r=box.getBoundingClientRect();
     rs={dir,sx:e.clientX,sy:e.clientY,x:r.left,y:r.top,w:r.width,h:r.height};
-    w.addEventListener('pointermove',onMove);
-    w.addEventListener('pointerup',onUp);
+    listen(w,'pointermove',onMove);
+    listen(w,'pointerup',onUp);
   }
   function onMove(e){
     if(!rs)return;
@@ -1164,15 +1012,20 @@ function setMinimized(min){
 btnMin.onclick=()=>setMinimized(ui.getAttribute('data-min')!=='1');
 
 let _bestiltInt=null;
-btnX.onclick=()=>{
-  if(_bestiltInt) clearInterval(_bestiltInt);
-  ui.remove(); toast?.remove?.();
+app.destroy=()=>{
+  if(app.busy){ app.closing=true; stopping=true; showToast('Lukker når pågående steg er ferdig'); return; }
+  life.abort(); clearInterval(_bestiltInt); clearTimeout(toastTimer);
+  ui.remove(); toast?.remove(); d.getElementById('ap3p_style')?.remove();
+  if(w.__easyPoint===app) delete w.__easyPoint;
 };
+btnX.onclick=()=>app.destroy();
+
+
 adjustHeights(ui.getBoundingClientRect().height);
 
 /* ========= mapping state ========= */
 const MAP_KEY='ap3p_map_v2';
-let mapping=G(MAP_KEY,[]);
+let mapping=G(MAP_KEY,[]); if(!Array.isArray(mapping)) mapping=[];
 function renderMapChip(){
   const csvCount=mapping.length;
   let imgCount=0; imagePool.forEach(a=>imgCount+=a.length);
@@ -1214,7 +1067,7 @@ let addExtraSizes=!!G(ADD_KEY,false);
 const addWrap=d.createElement('label');
 addWrap.style.cssText='display:flex;align-items:center;gap:6px;margin-left:8px;font-size:12px;opacity:.95';
 const addCb=d.createElement('input'); addCb.type='checkbox'; addCb.checked=addExtraSizes;
-const addTxt=d.createElement('span'); addTxt.textContent='Automatisk legg til ekstra størrelser';
+const addTxt=d.createElement('span'); addTxt.textContent='Opprett manglende materiellplasser ved autofyll';
 addWrap.append(addCb,addTxt);
 body.insertBefore(addWrap,drop);
 
@@ -1229,6 +1082,7 @@ owWrap.append(owCb,owTxt);
 body.insertBefore(owWrap,drop);
 
 let _lastPreview=null;
+function previewPlannedPlacements(){if(_lastPreview) renderPreview(_lastPreview);}
 
 function updateReuseLabel(){
   if(addExtraSizes){
@@ -1323,596 +1177,336 @@ drop.addEventListener('drop',async e=>{
   if(imgs.length) addImagesToPool(imgs);
 });
 
-/* ========= preview ========= */
-function tagLabel(entry){
-  if(!entry) return '(ukjent)';
-  if(typeof entry==='string') return entry.slice(0,60)+(entry.length>60?'…':'');
-  return entry.name?entry.name:'(uten navn)';
-}
-function countTilesBySizesFromExpanded(detailsList,size,variant){
-  const want=cs(size);
-  const vWant=variant||null;
-  const seen=new Set();
-  let n=0;
-  for(const det of (detailsList||[])){
-    const entries=sizesFromExpanded(det);
-    for(const e of entries){
-      if(e.size!==want) continue;
-      const tv=e.variant||null;
-      if(vWant && tv!==vWant) continue;
-      if(e.tile && seen.has(e.tile)) continue;
-      if(e.tile) seen.add(e.tile);
-      n++;
-    }
-  }
-  return n;
-}
-function countPlannedAdds(byId){
-  if(!addExtraSizes) return new Map();
-  const pools=buildTagPools(mapping);
-  const planned=new Map();
-
-  for(const [id,arr] of byId.entries()){
-    const tileCounts=new Map();
-    for(const e of arr){
-      const key=`${e.size}|${e.variant||''}|${e.side||''}`;
-      tileCounts.set(key,(tileCounts.get(key)||0)+1);
-    }
-    const uniqSizes=new Map();
-    for(const e of arr){
-      const k=`${e.size}|${e.variant||''}`;
-      if(!uniqSizes.has(k)) uniqSizes.set(k,{size:e.size,variant:e.variant||null});
-    }
-
-    const adds=[];
-    for(const sv of uniqSizes.values()){
-      const exactLine=pools.getExact(id,sv.size,sv.variant||null);
-      const sizeLine =pools.getSize(id,sv.size);
-      const exactAny =pools.getExact(null,sv.size,sv.variant||null);
-      const sizeAny  =pools.getSize(null,sv.size);
-
-      const list=(pools.hasLineIds
-        ? (exactLine.length?exactLine:(sizeLine.length?sizeLine:(exactAny.length?exactAny:sizeAny)))
-        : (exactAny.length?exactAny:sizeAny)
-      );
-
-      const scriptsCount=list?.length||0;
-
-      let tilesCount=0;
-      for(const [k,n] of tileCounts.entries()){
-        const [sz,vr]=k.split('|');
-        if(sz===sv.size && (vr||'')===(sv.variant||'')) tilesCount+=n;
-      }
-
-      const need=Math.max(0,scriptsCount-tilesCount);
-      if(need>0) adds.push({size:sv.size,variant:sv.variant||null,need});
-    }
-
-    if(adds.length) planned.set(id,adds);
-  }
-  return planned;
-}
-function previewPlannedPlacements(byId){
-  const pools=buildTagPools(mapping);
-  const reuse=reuseAssets;
-
-  LOG(`Modus: ${pools.hasLineIds?'Linje-spesifikk (ID i CSV).':'Global (ingen linje-ID i CSV).'}  •  Erstatt: ${overwriteMode==='all'?'alle':'kun tomme'}  •  Gjenbruk: ${reuse?'på':'av'}  •  Legg til ekstra: ${addExtraSizes?'på':'av'}`);
-
-  const plannedAdds=countPlannedAdds(byId);
-  let addTotal=0;
-  plannedAdds.forEach(v=>v.forEach(x=>addTotal+=x.need));
-  if(addTotal){
-    LOG(`\nPLAN: Legg til ekstra størrelser totalt: ${addTotal}`);
-    for(const [id,adds] of plannedAdds.entries()){
-      const txt=adds.map(a=>`${a.size}${a.variant?'/'+a.variant:''}×${a.need}`).join(', ');
-      LOG(`  • ${id}: ${txt}`);
-    }
-    LOG('');
-  }
-
-  for(const [id,arr] of byId.entries()){
-    const groups=new Map();
-    for(const e of arr){
-      const key=`${e.size}|${e.variant||''}|${e.side||''}`;
-      if(!groups.has(key)) groups.set(key,{entry:{size:e.size,variant:e.variant||null,side:e.side||null},tiles:[]});
-      if(e.tile) groups.get(key).tiles.push(e.tile);
-    }
-
-    LOG(`→ Forhåndsvis ${id}`);
-    if(!groups.size){ LOG('   (ingen størrelser funnet)'); continue; }
-
-    for(const {entry,tiles} of groups.values()){
-      const label=[entry.size,entry.variant,entry.side].filter(Boolean).join('/');
-
-      const imgsExact=imagePool.get(`${entry.size}|${entry.side||''}`)||[];
-      const imgsAny=entry.side ? (imagePool.get(`${entry.size}|`)||[]) : [];
-      const imgs=imgsExact.length?imgsExact:imgsAny;
-
-      if(imgs.length){
-        const lines=tiles.map((_,i)=>{
-          const f=reuse ? imgs[i%imgs.length] : (i<imgs.length?imgs[i]:null);
-          return f?`størrelse#${i+1} ← ${fileName(f)}`:`størrelse#${i+1} ← (ingen bilde)`;
-        });
-        LOG(`   • ${label}  (bilder) ${tiles.length} størrelse(er)\n      ${lines.join('\n      ')}`);
-        continue;
-      }
-
-      let poolItems=pools.getExact(id,entry.size,entry.variant||null);
-      if(!poolItems.length) poolItems=pools.getSize(id,entry.size);
-      if(!poolItems.length) poolItems=pools.getExact(null,entry.size,entry.variant||null);
-      if(!poolItems.length) poolItems=pools.getSize(null,entry.size);
-
-      if(!poolItems.length){ LOG(`   • ${label}  (ingen match på bilder eller scripts)`); continue; }
-
-      const lines=tiles.map((_,i)=>{
-        const payload=reuse?poolItems[i%poolItems.length]:(i<poolItems.length?poolItems[i]:null);
-        const nice=payload?tagLabel(payload):'(ingen script)';
-        return `størrelse#${i+1} ← ${nice}`;
-      });
-      LOG(`   • ${label}  (scripts) ${tiles.length} størrelse(er)\n      ${lines.join('\n      ')}`);
-    }
-  }
-}
-
-/* ========= scan ========= */
-let scanned=[]; let selected=new Set(G('ap3p_sel_ids',[]));
-function saveSelection(){S('ap3p_sel_ids',Array.from(selected))}
-function refreshList(){
-  list.innerHTML='';
-  if(!scanned.length){ list.innerHTML='<div class="muted">Ingen funnet — trykk Skann.</div>'; return; }
-  scanned.forEach(it=>{
-    const row=d.createElement('label'); row.className='item';
-    const cb=d.createElement('input'); cb.type='checkbox'; cb.checked=selected.has(it.id);
-    const id=d.createElement('span'); id.className='id'; id.textContent=it.id;
-    const sz=d.createElement('span'); sz.className='sizes'; sz.textContent=it.label;
-    row.append(cb,id,sz); list.appendChild(row);
-    cb.onchange=()=>{ if(cb.checked) selected.add(it.id); else selected.delete(it.id); saveSelection(); };
-  });
-}
-btnAll.onclick =()=>{selected=new Set(scanned.map(s=>s.id));saveSelection();refreshList()};
-btnNone.onclick=()=>{selected=new Set();saveSelection();refreshList()};
-btnInv.onclick =()=>{const next=new Set();scanned.forEach(s=>{if(!selected.has(s.id)) next.add(s.id)});selected=next;saveSelection();refreshList()};
-
+/* ========= shared queue, scan, bulk placeholders and autofill ========= */
+let scanned=[];
+let selected=new Set(Array.isArray(G('ap3p_sel_ids',[]))?G('ap3p_sel_ids',[]):[]);
 let stopping=false;
+function tagLabel(entry){return typeof entry==='string'?entry.slice(0,80):(entry?.name||'(uten navn)');}
 
-btnScan.onclick=async()=>{
-  log.textContent='';
-  scanned.length=0;
-
-  stopping=false;
-  btnRun.disabled=true; btnStop.disabled=false; btnScan.disabled=true;
-  showToast('Skanner…','Finner linjer og størrelser');
-
-  const rows=findRows();
-  const byId=new Map();
-
-  // Scan: åpne hver linje med ensureLineExpanded
-  // Scan: åpne hver linje med ensureLineExpanded
-for (const r of rows) {
-  if (stopping) break;
-
-  await ensureCampaignView();
-  await waitForIdle();
-
-  const id = rowId(r);
-  const detRows = await ensureLineExpanded(r);
-
-  if (!detRows || !detRows.length) {
-    LOG(`! Klarte ikke å åpne linje ${id} (fant ikke collapse/creative section). Hopper over.`);
-    continue;
+function saveSelection(){S('ap3p_sel_ids',[...selected]);}
+function refreshList(){
+  list.replaceChildren();
+  if(!scanned.length){const empty=d.createElement('div');empty.className='muted';empty.textContent='Trykk Skann for å hente linjer og tilgjengelige størrelser.';list.append(empty);return;}
+  for(const item of scanned){
+    const row=d.createElement('label');row.className='item';
+    const cb=d.createElement('input');cb.type='checkbox';cb.checked=selected.has(item.id);cb.disabled=app.busy;
+    const id=d.createElement('span');id.className='id';id.textContent=item.id;
+    const sizes=d.createElement('span');sizes.className='sizes';sizes.textContent=item.label;
+    row.append(cb,id,sizes);list.append(row);
+    cb.onchange=()=>{if(cb.checked)selected.add(item.id);else selected.delete(item.id);saveSelection();};
   }
-
-  for (const det of detRows) {
-    await waitForIdle();
-    await ensureAllTilesMounted(det);
-    await sleep(80);
-
-    const entries = sizesFromExpanded(det);
-    const prev = byId.get(id) || [];
-    byId.set(id, prev.concat(entries));
-  }
-
-  await sleep(40);
 }
+btnAll.onclick=()=>{if(app.busy)return;selected=new Set(scanned.map(x=>x.id));saveSelection();refreshList();};
+btnNone.onclick=()=>{if(app.busy)return;selected.clear();saveSelection();refreshList();};
+btnInv.onclick=()=>{if(app.busy)return;selected=new Set(scanned.filter(x=>!selected.has(x.id)).map(x=>x.id));saveSelection();refreshList();};
 
-
-  const report=[];
-  for(const [id,arr] of byId.entries()){
-    const pretty=prettyCounts(arr.map(({size,variant})=>({size,variant})));
-    LOG(`• ${id}  størrelser:[${pretty||'-'}]`);
-
-    const uniq=new Map();
-    for(const e of arr){
-      const k=`${e.size}|${e.variant||''}|${e.side||''}`;
-      if(!uniq.has(k)) uniq.set(k,{size:e.size,variant:e.variant,side:e.side});
-    }
-    report.push({id,entries:[...uniq.values()],label:pretty||'-'});
+const bulk=d.createElement('div');bulk.style.cssText='flex:1 1 100%;border:1px solid #3a3f52;border-radius:8px;padding:8px;display:flex;gap:7px;align-items:center;flex-wrap:wrap';
+const bulkLabel=d.createElement('strong');bulkLabel.textContent='Nye materiellplasser';bulkLabel.style.fontSize='12px';
+const bulkRows=d.createElement('div');bulkRows.style.cssText='flex:1 1 100%;display:grid;gap:5px';
+const bulkPlus=d.createElement('button');bulkPlus.textContent='+ Størrelse';
+const btnBulk=d.createElement('button');btnBulk.textContent='Legg til på valgte linjer';
+const bulkNote=d.createElement('span');bulkNote.textContent='Antall er nye plasser per valgt linje. Kun størrelser linjen tilbyr blir brukt.';bulkNote.style.cssText='font-size:11px;opacity:.8';
+[bulkPlus,btnBulk].forEach(btn=>btn.style.cssText='cursor:pointer;border:1px solid #0284c7;border-radius:6px;padding:5px 8px;background:#1a1d27;color:#e6e6e6');
+bulk.append(bulkLabel,bulkPlus,btnBulk,bulkNote,bulkRows);body.insertBefore(bulk,drop);
+const bulkControls=[];
+function availableBulkOptions(){
+  const map=new Map();
+  for(const line of scanned)for(const option of line.allowed||[]){
+    const key=option.size+'|'+(option.variant||'')+'|'+option.label;
+    if(!map.has(key))map.set(key,{...option,key});
   }
+  return [...map.values()];
+}
+function refreshBulkOptions(){
+  const options=availableBulkOptions();
+  for(const control of bulkControls){
+    const chosen=control.select.value;control.select.replaceChildren();
+    for(const option of options){const el=d.createElement('option');el.value=option.key;el.textContent=option.label+(option.variant&&!parseSizeVariant(option.label).variant?' ('+option.variant+')':'');control.select.append(el);}
+    if(options.some(x=>x.key===chosen))control.select.value=chosen;
+    if(!options.length){const el=d.createElement('option');el.textContent='Skann for å hente størrelser';el.value='';control.select.append(el);}
+  }
+}
+function addBulkRow(){
+  if(app.busy)return;
+  const row=d.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center';
+  const select=d.createElement('select');select.setAttribute('aria-label','Størrelse for nye materiellplasser');select.style.cssText='flex:1;min-width:140px;background:#161922;color:#eee;border:1px solid #3a3f52;padding:4px;border-radius:5px';
+  const count=d.createElement('input');count.type='number';count.min='1';count.step='1';count.value='1';count.setAttribute('aria-label','Antall nye materiellplasser per linje');count.style.cssText='width:68px;background:#161922;color:#eee;border:1px solid #3a3f52;padding:4px;border-radius:5px';
+  const remove=d.createElement('button');remove.textContent='×';remove.title='Fjern størrelse';
+  const control={row,select,count,remove};bulkControls.push(control);
+  remove.onclick=()=>{if(app.busy)return;row.remove();bulkControls.splice(bulkControls.indexOf(control),1);adjustHeights(ui.getBoundingClientRect().height);};
+  row.append(select,count,remove);bulkRows.append(row);refreshBulkOptions();adjustHeights(ui.getBoundingClientRect().height);
+}
+bulkPlus.onclick=addBulkRow;addBulkRow();
 
-  LOG(`\nFant ${report.length} linje(r).`);
-  try{previewPlannedPlacements(byId)}catch(e){LOG('! Forhåndsvis feilet: '+(e?.message||e))}
-
-  _lastPreview=byId;
-  setInfo({items:report.length,done:0,hit:0,skip:0,err:0});
-  scanned=report.slice();
-  selected=new Set(report.map(r=>r.id));
-  saveSelection(); refreshList();
-
-  btnRun.disabled=false; btnStop.disabled=true; btnScan.disabled=false;
-  showToast('Skann ferdig',`Linjer: ${report.length}`);
-};
-
-/* ========= run ========= */
+function setBusy(value){
+  app.busy=value;
+  const controls=[btnScan,btnRun,btnBulk,bulkPlus,btnCSV,btnPaste,mapClear,reuseCb,addCb,owCb,btnAll,btnNone,btnInv,
+    ...bulkControls.flatMap(x=>[x.select,x.count,x.remove])];
+  for(const control of controls)control.disabled=value;
+  if(!value){reuseCb.disabled=addExtraSizes;btnBulk.disabled=!scanned.length;}
+  btnStop.disabled=!value;
+  drop.style.pointerEvents=value?'none':'';
+  refreshList();
+}
+async function withJob(label,fn){
+  if(app.busy)return;
+  stopping=false;setBusy(true);showToast(label);
+  try{await fn();}
+  catch(error){LOG('! '+(error?.message||error));showToast('Jobben er stoppet',error?.message||String(error));}
+  finally{setBusy(false);if(app.closing)app.destroy();}
+}
+function requireRunning(){if(stopping)throw new Error('Stoppet av bruker. Pågående endring er avsluttet.');}
 btnStop.onclick=()=>{
-  stopping=true;
-  btnStop.disabled=true;
-  btnRun.disabled=false;
-  showToast('Stopper…','Avbryter etter nåværende steg');
+  if(!app.busy)return;
+  stopping=true;btnStop.disabled=true;
+  showToast('Stopper…','Venter på at pågående tillegging eller lagring blir avsluttet.');
 };
 
-btnRun.onclick=()=>{
-  const ids=[...new Set(scanned.filter(s=>selected.has(s.id)).map(s=>s.id))];
-  if(!ids.length){LOG('Ingen valgt — trykk Skann og velg linjer.');return}
-  if(!mapping.length && imagePool.size===0){LOG('Ingen mapping — importer CSV/JSON eller bilder først.');return}
-  runOnIds(ids);
-  
-};
+async function recordsForLine(id){
+  if(!await ensureCampaignView())throw new Error('Fant ikke kampanjetabellen.');
+  const rows=findRowsByIdAll(String(id));
+  if(rows.length!==1)throw new Error(`Linje ${id}: fant ${rows.length} rader; kan ikke velge entydig.`);
+  const details=await ensureLineExpanded(rows[0]);
+  if(!details.length)throw new Error(`Linje ${id}: kunne ikke åpne materiellområdet.`);
+  const records=[],seen=new Set();
+  for(const detail of details){
+    await ensureAllTilesMounted(detail);
+    for(const entry of sizesFromExpanded(detail)){
+      const placeholder=placeholderId(entry.tile);
+      if(!placeholder)throw new Error(`Linje ${id}: fant en materiellplass uten lesbar placeholder-ID.`);
+      if(seen.has(placeholder))continue;seen.add(placeholder);
+      records.push({...entry,line:String(id),placeholder});
+    }
+  }
+  return records;
+}
+async function getFreshRecord(line,placeholder){return (await recordsForLine(line)).find(x=>x.placeholder===placeholder)||null;}
+function assertTarget(record){
+  const identity=panelIdentity();
+  if(identity.placeholder!==record.placeholder || (identity.line&&identity.line!==record.line))throw new Error(`Valgt materiell samsvarer ikke med linje ${record.line}, placeholder ${record.placeholder}. Ingen videre skriving.`);
+  const selectedTiles=[...d.querySelectorAll('.set-creativeTile__selected,.set-creativeTile[aria-selected="true"]')].filter(vis);
+  if(selectedTiles.length!==1||placeholderId(selectedTiles[0])!==record.placeholder)throw new Error('Riktig materiellplass er ikke entydig valgt.');
+}
+async function editorForRecord(record){
+  const fresh=await getFreshRecord(record.line,record.placeholder);
+  if(!fresh||!await selectTile(fresh.tile)||!await ensurePanelSwitchedToTile(fresh.tile))throw new Error(`Kunne ikke bekrefte valgt materiellplass ${record.placeholder}.`);
+  const editor=await get3PEditorStrict();
+  if(!editor)throw new Error(`Fant ikke 3rd party-editor på materiellplass ${record.placeholder}.`);
+  assertTarget(record);return editor;
+}
+async function inspectRecord(record){
+  const editor=await editorForRecord(record);
+  const value=await getEditorValueStable(editor);
+  assertTarget(record);
+  const fresh=await getFreshRecord(record.line,record.placeholder);
+  return {record:fresh,value,occupied:!isEmpty3PValue(value)||tileHasMaterial(fresh.tile)};
+}
+function sameTag(a,b){return normalizeTagForCompare(a)===normalizeTagForCompare(b);}
+function takeExistingMatches(assets,states,kind){
+  const remaining=assets.slice();let matched=0;
+  if(kind==='script')for(const state of states){
+    if(isEmpty3PValue(state.value))continue;
+    const index=remaining.findIndex(item=>sameTag(item.tag,state.value));
+    if(index!==-1){remaining.splice(index,1);matched++;}
+  }
+  return {remaining,matched};
+}
+function lineScriptSpecs(id,map){
+  const eligible=map.filter(item=>item.size&&item.tag&&(!(item.lineIds||[]).length||(item.lineIds||[]).map(String).includes(id)));
+  const keys=[...new Set(eligible.map(item=>`${cs(item.size)}|${item.variant||''}`))];
+  return keys.map(key=>{
+    const [size,variant]=key.split('|');
+    const exact=eligible.filter(item=>cs(item.size)===size&&(item.variant||'')===variant);
+    const scoped=exact.filter(item=>(item.lineIds||[]).map(String).includes(id));
+    return {kind:'script',size,variant:variant||null,side:null,assets:scoped.length?scoped:exact.filter(item=>!(item.lineIds||[]).length)};
+  }).sort((a,b)=>Number(!!b.variant)-Number(!!a.variant));
+}
+function workGroups(id,records,map,images){
+  const scripts=lineScriptSpecs(id,map);
+  const imageSpecs=[...images].map(([key,assets])=>{const [size,side]=key.split('|');return {kind:'image',size,side:side||null,variant:null,assets};})
+    .sort((a,b)=>Number(!!b.side)-Number(!!a.side));
+  const used=new Set(),groups=[];
+  for(const spec of [...imageSpecs,...scripts]){
+    // Retain the original image-first rule for a size supplied as images.
+    if(spec.kind==='script'&&imageSpecs.some(image=>image.size===spec.size))continue;
+    const matching=records.filter(record=>record.size===spec.size&&(!spec.variant||record.variant===spec.variant)&&(!spec.side||record.side===spec.side)&&!used.has(record.placeholder));
+    matching.forEach(record=>used.add(record.placeholder));
+    groups.push({...spec,records:matching});
+  }
+  return groups;
+}
+function optionForGroup(allowed,group){
+  let options=allowed.filter(option=>option.size===group.size);
+  if(group.variant){const exact=options.filter(x=>x.variant===group.variant);options=exact.length?exact:options.filter(x=>!x.variant);}
+  if(group.side)options=options.filter(x=>detectSide(x.label)===group.side);
+  return options.length===1?options[0]:null;
+}
+function renderPreview(byId){
+  LOG(`Plan: ${overwriteMode==='all'?'erstatt eksisterende':'bevar eksisterende'} · ${addExtraSizes?'opprett manglende plasser':'bruk eksisterende plasser'} · gjenbruk ${reuseAssets?'på':'av'}`);
+  for(const [id,records]of byId){
+    LOG(`→ Linje ${id}: ${prettyCounts(records)||'ingen plasser'}`);
+    const groups=workGroups(id,records,mapping,imagePool);
+    for(const group of groups){
+      LOG(`   ${group.size}${group.variant?'/'+group.variant:''}${group.side?'/'+group.side:''}: ${group.assets.length} ${group.kind==='image'?'bilder':'scripts'}, ${group.records.length} plasser.`);
+    }
+  }
+  LOG('Tom/utfylt-status, eksisterende scripts og nøyaktig tilleggsbehov kontrolleres ved autofyll.');
+}
 
-/* ========= rebuild details + entries (standard: ensureLineExpanded) ========= */
-async function rebuildDetailsAndEntries(rowsForId){
-  const detailsList=[];
-  for(const r of (rowsForId||[])){
-    if(!r) continue;
-    await ensureCampaignView();
-    await waitForIdle();
-    const detRows = await ensureLineExpanded(r);
-for(const det of (detRows || [])){
-  detailsList.push(det);
+btnScan.onclick=()=>withJob('Skanner Adpoint…',async()=>{
+  log.textContent='';
   await waitForIdle();
-  await ensureAllTilesMounted(det);
-  await sleep(80);
-}
-
-  }
-
-  const all=[];
-  for(const det of detailsList){
-    try{ all.push(...sizesFromExpanded(det)); }catch{}
-  }
-
-  const uniq=new Map();
-  for(const e of all){
-    const k=`${e.size}|${e.variant||''}|${e.side||''}`;
-    if(!uniq.has(k)) uniq.set(k,{size:e.size,variant:e.variant||null,side:e.side||null,tile:e.tile||null});
-  }
-
-  return {detailsList, entries:[...uniq.values()]};
-}
-
-/* ========= main run ========= */
-async function runOnIds(ids){
-  stopping=false;
-  btnRun.disabled=true; btnStop.disabled=false; btnScan.disabled=true;
-
-  const stats={items:ids.length,done:0,hit:0,skip:0,err:0};
-  setInfo(stats);
-  LOG(`Starter… (${ids.length} linje(r))`);
-  showToast('Autofyll startet',`Linjer: ${ids.length}`);
-
-  const pools=buildTagPools(mapping);
-
+  const rows=findRows();if(!rows.length)throw new Error('Fant ingen kampanjelinjer på denne siden.');
+  const ids=rows.map(rowId);
+  if(ids.includes('?')||new Set(ids).size!==ids.length)throw new Error('Linje-ID-ene kunne ikke leses entydig fra kolonnen Line item.');
+  const report=[],byId=new Map();
   for(const id of ids){
-    if(stopping) break;
+    if(stopping)break;
+    const records=await recordsForLine(id);
+    let allowed=[];
+    try{allowed=await getAllowedAddSizesForLine(id);}
+    catch(error){LOG(`! Linje ${id}: autofyll kan brukes, men størrelsesmenyen kunne ikke leses: ${error.message}`);}
+    const row=findRowsByIdAll(id)[0];const {rosenrIdx}=getHeaderIdxForRow(row);
+    const material=row.children[rosenrIdx]?.textContent.trim()||'';
+    const label=`${prettyCounts(records)||'ingen plasser'}${material?' · materiell '+material:''}`;
+    report.push({id,label,allowed});byId.set(id,records);LOG(`• ${id}: ${label}`);
+  }
+  scanned=report;selected=new Set(report.map(x=>x.id));saveSelection();refreshList();refreshBulkOptions();
+  _lastPreview=byId;renderPreview(byId);
+  setInfo({items:ids.length,done:report.length});
+  showToast(stopping?'Skann stoppet':'Skann ferdig',`${report.length} linjer lest`);
+  adjustHeights(ui.getBoundingClientRect().height);
+});
 
+function selectedIds(){return scanned.filter(x=>selected.has(x.id)).map(x=>x.id);}
+function bulkRequests(){
+  const options=availableBulkOptions(),requests=new Map();
+  for(const control of bulkControls){
+    const option=options.find(x=>x.key===control.select.value),count=Number(control.count.value);
+    if(!option||!Number.isSafeInteger(count)||count<1)throw new Error('Velg en størrelse og et positivt heltall for hver rad.');
+    const existing=requests.get(option.key);
+    if(existing){existing.count+=count;if(!Number.isSafeInteger(existing.count))throw new Error('Antallet er for stort.');}
+    else requests.set(option.key,{...option,count});
+  }
+  if(!requests.size)throw new Error('Legg til minst én størrelse.');
+  return [...requests.values()];
+}
+btnBulk.onclick=()=>withJob('Legger til materiellplasser…',async()=>{
+  const ids=selectedIds();if(!ids.length)throw new Error('Skann og velg minst én linje først.');
+  const requests=bulkRequests(),plan=[];
+  // Refresh allowed menus before mutating; the scan can have become stale.
+  for(const id of ids){
+    requireRunning();const allowed=await getAllowedAddSizesForLine(id);
+    for(const request of requests){
+      const option=allowed.find(x=>x.size===request.size&&x.label===request.label&&(x.variant||null)===(request.variant||null));
+      if(option)plan.push({id,request,option});else LOG(`• Linje ${id}: hopper over ${request.label}; linjen tilbyr ikke dette valget.`);
+    }
+  }
+  const total=plan.reduce((n,x)=>n+x.request.count,0);
+  if(!total)throw new Error('Ingen av valgte linjer tilbyr størrelsene du valgte.');
+  LOG(`Legger til ${total} nye materiellplasser på ${new Set(plan.map(x=>x.id)).size} linjer.`);
+  const stats={items:ids.length,done:0,added:0,err:0};
+  try{
+    for(const {id,request,option} of plan){
+      for(let n=0;n<request.count;n++){
+        requireRunning();
+        const fresh=await addSizeScopedToLine(id,request.size,request.variant,option.label);
+        stats.added++;setInfo(stats);LOG(`+ ${stats.added}/${total}: linje ${id}, ${request.label}, placeholder ${fresh.placeholder}`);
+      }
+    }
+    stats.done=ids.length;LOG(`Ferdig: ${stats.added} nye materiellplasser.`);showToast('Materiellplasser lagt til',`${stats.added} nye plasser`);
+  }catch(error){if(error.uncertain)stats.uncertain=(stats.uncertain||0)+1;else if(!stopping)stats.err++;throw error;}
+  finally{setInfo(stats);await refreshAfterMutation(ids);}
+});
+async function refreshAfterMutation(ids){
+  const byId=new Map();
+  for(const id of ids){
     try{
-      const rowsForId=findRowsByIdAll(id);
-
-      // Sørg for at de er åpne (en gang per ID)
-      await ensureCampaignView();
-await waitForIdle();
-await waitConfirmUIHealthy();
-
-      for(const dr of rowsForId){
-        if(stopping) break;
-        await ensureLineExpanded(dr);
-      }
-      await waitForIdle();
-
-      let {detailsList, entries}=await rebuildDetailsAndEntries(rowsForId);
-
-      LOG(`→ ${id} størrelser:[${prettyCounts(entries)||'—'}]`);
-      if(!entries.length){ stats.skip++; stats.done++; setInfo(stats); continue; }
-
-      let wrote=false;
-
-      // ---- add extra sizes (optional) ----
-if(addExtraSizes && mapping.length){
-
-  // 1) Finn hvilke størrelser som i det hele tatt er relevante for denne ID-en (linje-scope + global)
-  const svKeys=new Set();
-  for(const m of (mapping||[])){
-    const idsArr=(m.lineIds||[]).map(String).filter(Boolean);
-    if(idsArr.length && !idsArr.includes(String(id))) continue; // line-scoped men ikke denne id
-    if(!m.size || !m.tag) continue;
-    svKeys.add(`${m.size}|${m.variant||''}`);
+      const records=await recordsForLine(id);byId.set(id,records);
+      const item=scanned.find(x=>x.id===id);if(item)item.label=prettyCounts(records)||'ingen plasser';
+    }catch(error){LOG(`! Kunne ikke oppdatere visning for ${id}: ${error.message}`);}
   }
-
-  // 2) Bygg en "allowed sizes" liste per dataRow (hva menyen faktisk tilbyr)
-  //    (menyen er linje-spesifikk, så dette er kritisk)
-  const allowedByRow = new Map(); // dr -> Set(sizes)
-  const allowedUnion = new Set(); // alle sizes som finnes på minst én av dr-ene
-
-  for(const dr of rowsForId){
-    if(stopping) break;
-    await ensureLineExpanded(dr);
-    await ensureCampaignView();
-    await waitForIdle();
-
-    const allowed = await getAllowedAddSizesForLine(dr); // du har denne funksjonen allerede
-    const set = new Set((allowed||[]).map(cs));         // normaliser "580x500"
-    allowedByRow.set(dr, set);
-    for(const s of set) allowedUnion.add(s);
-  }
-
-  // 3) Sørg for at tiles er montert før vi teller
-  for(const det of detailsList) await ensureAllTilesMounted(det);
-  await sleep(80);
-
-  // 4) Regn ut hva vi MANGLER (scriptsCount - tilesCount) pr størrelse
-  const needList=[];
-  for(const k of svKeys){
-    const [szRaw,vr]=k.split('|');
-    const sz = cs(szRaw);
-    const variant = vr || null;
-
-    // 🚫 Hvis ingen av linjene tilbyr denne størrelsen i Add-menyen, ikke prøv i det hele tatt.
-    if(!allowedUnion.has(sz)) continue;
-
-    const exactLine=pools.getExact(id,sz,variant);
-    const sizeLine =pools.getSize(id,sz);
-    const exactAny =pools.getExact(null,sz,variant);
-    const sizeAny  =pools.getSize(null,sz);
-
-    let list;
-    if(pools.hasLineIds){
-      if(exactLine.length) list=exactLine;
-      else if(sizeLine.length) list=sizeLine;
-      else if(exactAny.length) list=exactAny;
-      else list=sizeAny;
-    }else{
-      list=exactAny.length?exactAny:sizeAny;
-    }
-
-    const scriptsCount=list?.length||0;
-    if(!scriptsCount) continue;
-
-    const tilesCount=countTilesBySizesFromExpanded(detailsList,sz,variant);
-    const need=Math.max(0, scriptsCount - tilesCount);
-    if(need>0) needList.push({size:sz,variant,need});
-  }
-
-  if(needList.length){
-    LOG(`   · Legg-til plan (${id}): `+needList.map(x=>`${x.size}×${x.need}`).join(', '));
-
-    for(const x of needList){
-      if(stopping) break;
-
-      // Finn hvilke rows som faktisk tilbyr denne størrelsen
-      const candidateRows = rowsForId.filter(dr => (allowedByRow.get(dr)||new Set()).has(cs(x.size)));
-      if(!candidateRows.length){
-        LOG(`   ! Hopper over ${x.size}: ingen av valgte linjer tilbyr denne størrelsen i menyen`);
-        continue;
-      }
-
-      for(let n=0;n<x.need;n++){
-        if(stopping) break;
-
-        await ensureCampaignView();
-        await waitForIdle();
-
-        let res=null;
-
-        // ✅ Prøv KUN på rader som har størrelsen i menyen
-        for(const dr of candidateRows){
-          if(stopping) break;
-          res = await addSizeScopedToLine(dr, x.size);
-          if(res?.ok) break;
-        }
-
-        if(!res?.ok){
-          LOG(`   ! Klarte ikke å legge til ${x.size}: ${res?.reason||'ukjent feil'}`);
-          break;
-        }
-
-        LOG(`   + La til størrelse: ${x.size}`);
-
-        await waitForIdle(15000);
-        await sleep(500);
-        for(const dr of rowsForId) await ensureLineExpanded(dr);
-
-        // rebuild after adds
-        ({detailsList, entries}=await rebuildDetailsAndEntries(rowsForId));
-      }
-    }
-
-    LOG(`   · Etter legg-til: størrelser=[${prettyCounts(entries)||'—'}]`);
-  }
+  _lastPreview=byId;refreshList();
 }
 
-
-      // ---- apply tags/images ----
-      for(const entry of entries){
-        if(stopping) break;
-
-        // Finn tiles for entry (samlet)
-        let tiles=[];
-        for(const det of detailsList) tiles=tiles.concat(pickTilesForEntry(det,entry));
-        tiles=Array.from(new Set(tiles));
-
-        if(!tiles.length){
-          // try remount
-          for(const det of detailsList) await ensureAllTilesMounted(det);
-          tiles=[];
-          for(const det of detailsList) tiles=tiles.concat(pickTilesForEntry(det,entry));
-          tiles=Array.from(new Set(tiles));
-        }
-
-        if(!tiles.length){
-          LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''} (ingen matchende størrelser)`);
+btnRun.onclick=()=>withJob('Autofyll startet…',async()=>{
+  const ids=selectedIds();if(!ids.length)throw new Error('Skann og velg minst én linje først.');
+  if(!mapping.length&&!imagePool.size)throw new Error('Importer CSV/JSON eller bilder først.');
+  const map=mapping.map(x=>({...x,lineIds:[...(x.lineIds||[])]}));
+  const images=new Map([...imagePool].map(([key,files])=>[key,files.slice()]));
+  const settings={overwrite:overwriteMode,add:addExtraSizes,reuse:reuseAssets};
+  const stats={items:ids.length,done:0,saved:0,added:0,skip:0,err:0,matched:0};setInfo(stats);
+  try{
+    for(const id of ids){
+      requireRunning();await waitForIdle();
+      const records=await recordsForLine(id);
+      const groups=workGroups(id,records,map,images);
+      const allowed=settings.add?await getAllowedAddSizesForLine(id):[];
+      if(!groups.length){stats.skip++;stats.done++;setInfo(stats);continue;}
+      for(const group of groups){
+        requireRunning();
+        if(!group.records.length&&(!settings.add||!optionForGroup(allowed,group))){
+          stats.skip+=group.assets.length;
+          LOG(`• Linje ${id}: hopper over ${group.size}${group.variant?'/'+group.variant:''}; ingen passende plass eller tilgjengelig størrelsesvalg.`);
           continue;
         }
-
-        // Images first
-        const imgs=imageChoicesForEntry(entry);
-        if(imgs.length){
-          let placed=0;
-          for(let i=0;i<tiles.length;i++){
-            if(stopping) break;
-            const t=tiles[i];
-            const f=reuseAssets ? imgs[i%imgs.length] : (i<imgs.length?imgs[i]:null);
-            if(!f) continue;
-            t.scrollIntoView({block:'center'});
-            const ok=await uploadImageToTile(t,f);
-            await sleep(160);
-            if(ok) placed++;
+        const states=[];
+        for(const record of group.records){requireRunning();states.push(await inspectRecord(record));}
+        const matches=settings.overwrite==='empty'?takeExistingMatches(group.assets,states,group.kind):{remaining:group.assets.slice(),matched:0};
+        let remaining=matches.remaining;stats.matched+=matches.matched;
+        if(matches.matched)LOG(`✓ Linje ${id}, ${group.size}: ${matches.matched} scripts finnes allerede og bevares.`);
+        const slots=settings.overwrite==='all'?states:states.filter(x=>!x.occupied);
+        stats.skip+=states.length-slots.length;
+        const need=settings.add?Math.max(0,remaining.length-slots.length):0;
+        if(need){
+          const option=optionForGroup(allowed,group);
+          if(!option)throw new Error(`Linje ${id}: kan ikke entydig opprette ${group.size}${group.variant?'/'+group.variant:''}. Ingen scripts i denne gruppen ble skrevet.`);
+          LOG(`Linje ${id}, ${group.size}: oppretter ${need} manglende plasser.`);
+          for(let i=0;i<need;i++){
+            requireRunning();
+            const record=await addSizeScopedToLine(id,group.size,group.variant,option.label);
+            if(group.side&&record.side!==group.side)throw new Error('Ny materiellplass har ikke forventet side. Kontroller Adpoint.');
+            stats.added++;setInfo(stats);
+            const state=await inspectRecord(record);
+            if(state.occupied)throw new Error('Ny materiellplass inneholder allerede materiell. Kontroller Adpoint.');
+            slots.push(state);
           }
-          LOG(`   • ${entry.size}${entry.side?('/'+entry.side):''}  lagt inn bilder=${placed}${placed<tiles.length?` (hoppet over ${tiles.length-placed})`:''}`);
-          wrote = placed>0 || wrote;
-          continue;
         }
-
-        // Scripts
-        const exactLine=pools.getExact(id,entry.size,entry.variant||null);
-        const sizeLine =pools.getSize(id,entry.size);
-        const exactAny =pools.getExact(null,entry.size,entry.variant||null);
-        const sizeAny  =pools.getSize(null,entry.size);
-
-        let list;
-        if(pools.hasLineIds){
-          if(exactLine.length) list=exactLine;
-          else if(sizeLine.length) list=sizeLine;
-          else if(exactAny.length) list=exactAny;
-          else list=sizeAny;
-        }else{
-          list=exactAny.length?exactAny:sizeAny;
-        }
-
-        if(!list || !list.length){
-          LOG(`   • ${entry.size}${entry.variant?('/'+entry.variant):''} (ingen script for denne størrelsen/linjen)`);
-          continue;
-        }
-
-        LOG(`   • ${entry.size}${entry.variant?('/'+entry.variant):''}  størrelser=${tiles.length}, scripts=${list.length}`);
-
-        let used=0, skipped=0;
-
-        // (Speed) ensure campaign view once per entry
-        await ensureCampaignView();
-        await waitForIdle();
-
-        for(let i=0;i<tiles.length;i++){
-          if(stopping) break;
-
-          const payload=reuseAssets ? list[i%list.length] : (i<list.length?list[i]:null);
-          if(!payload){ skipped++; continue; }
-
-          if(i>0 && (i%18===0)) await checkpoint(`størrelse ${i}/${tiles.length}`);
-
-
-          const tile=tiles[i];
-
-          await selectTile(tile);
-await ensurePanelSwitchedToTile(tile,3500);
-
-// Dropp ensurePanelOnSize her – det er dyrt og ofte unødvendig
-let editor = await get3PEditorStrict();
-await sleep(60);
-
-if(!editor){
-  await ensurePanelOnSize(entry.size, 800);
-  await waitForIdle(6000);
-
-  const editor2 = await get3PEditorStrict();
-
-  if(!editor2){ LOG('   ! Fant ikke 3rd-party editor'); stats.err++; continue; }
-  editor = editor2;
-}
-
-await sleep(120);
-if(!editor){ LOG('   ! Fant ikke 3rd-party editor'); stats.err++; continue; }
-
-
-          // overwrite logic
-          if(overwriteMode==='empty'){
-  // 1) superrask guard
-  if(tileHasMaterial(tile)){ skipped++; continue; }
-
-  // 2) les editor raskt (1–2 samples), ikke 18 samples
-  await sleep(60);
-  let cur = getEditorValue(editor);
-
-  if(isEmpty3PValue(cur)){
-    // liten "nudge" om CodeMirror ikke har oppdatert seg ennå
-    try{ (editor.el||editor).focus?.(); (editor.el||editor).click?.(); }catch{}
-    await sleep(120);
-    cur = getEditorValue(editor);
-  }
-
-  if(!isEmpty3PValue(cur)){ skipped++; continue; }
-}
-
-
-          const tagStr=(typeof payload==='string') ? payload : (payload?.tag||'');
-          let pasted = await pasteWithVerify(editor, tagStr, 2);
-
-if(!pasted){
-  // Stabil recovery én gang: UI kan ha mistet fokus / editor ikke ready
-  await waitForIdle(6000);
-  await selectTile(tile);
-  await ensurePanelSwitchedToTile(tile,2500);
-
-  const ed2 = await get3PEditorStrict();
-
-  if(ed2){
-    pasted = await pasteWithVerify(ed2, tagStr, 2);
-    if(pasted) editor = ed2;
-  }
-}
-
-if(!pasted){
-  LOG('   ! Lim inn festet ikke (etter recovery) — hopper over størrelse');
-  stats.err++;
-  continue;
-}
-
-
-          used++;
-          if(G('ap3p_auto',true)){
-            const saved=await saveWithRetry(editor,2);
-            if(!saved) LOG('   ! Lagre/Oppdater/Send inn på nytt feilet (fortsetter)');
+        let placed=0;
+        for(const state of slots){
+          requireRunning();
+          const asset=settings.reuse&&remaining.length?remaining[placed%remaining.length]:remaining[placed];
+          if(!asset)break;
+          // Re-read immediately before writing: UI and server may have changed since planning.
+          const check=await inspectRecord(state.record);
+          if(settings.overwrite==='empty'&&check.occupied)throw new Error('En planlagt tom plass er blitt fylt. Jobben stoppet før overskriving.');
+          if(!sameTag(check.value,state.value))throw new Error('Materiellinnholdet endret seg under kjøringen. Kontroller Adpoint.');
+          if(group.kind==='image'){
+            await uploadImageToTile(check.record,asset);
+          }else{
+            const editor=await editorForRecord(check.record);
+            assertTarget(check.record);
+            if(!await pasteWithVerify(editor,asset.tag,1))throw new Error('Scriptet festet seg ikke i editoren.');
+            assertTarget(check.record);
+            await saveWithRetry(editor,check.record,asset.tag);
           }
-
-          await sleep(160);
+          placed++;stats.saved++;setInfo(stats);
+          LOG(`✓ Linje ${id}, ${group.size}, placeholder ${state.record.placeholder}: ${group.kind==='image'?fileName(asset):tagLabel(asset)} — bekreftet.`);
         }
-
-        LOG(`     → brukt scripts=${used}${skipped?` (hoppet over ${skipped})`:''}`);
-        wrote = used>0 || wrote;
+        if(!settings.reuse&&placed<remaining.length){
+          stats.skip+=remaining.length-placed;
+          LOG(`! ${remaining.length-placed} ${group.kind==='image'?'bilder':'scripts'} mangler plass på linje ${id}. Slå på «Opprett manglende materiellplasser» for å legge til.`);
+        }
       }
-
-      if(wrote) stats.hit++; else stats.skip++;
-      stats.done++; setInfo(stats);
-      await sleep(160);
-
-    }catch(e){
-      LOG('   ! feil: '+(e&&e.message?e.message:e));
-      stats.err++; stats.done++; setInfo(stats);
+      stats.done++;setInfo(stats);
     }
-  }
+    LOG(`Ferdig. Bekreftet lagret/opplastet: ${stats.saved}. Allerede på plass: ${stats.matched}. Nye plasser: ${stats.added}. Hoppet over: ${stats.skip}.`);
+    showToast('Autofyll ferdig',`Lagret: ${stats.saved} · Allerede på plass: ${stats.matched} · Nye: ${stats.added}`);
+  }catch(error){if(error.uncertain)stats.uncertain=(stats.uncertain||0)+1;else if(!stopping)stats.err++;throw error;}
+  finally{setInfo(stats);await refreshAfterMutation(ids);}
+});
+refreshList();btnBulk.disabled=true;
 
-  LOG(`Ferdig. Linjer=${stats.items}  Treff=${stats.hit}  Hoppet=${stats.skip}  Feil=${stats.err}`);
-  showToast('Ferdig',`Treff: ${stats.hit} • Feil: ${stats.err}`);
-  btnStop.disabled=true; btnRun.disabled=false; btnScan.disabled=false;
-}
 
 /* ========= campaign view helpers ========= */
 function inCampaignTableView(){ return !!d.querySelector('tr.set-matSpecDataRow'); }
@@ -1936,25 +1530,15 @@ async function ensureCampaignView(){
   return inCampaignTableView();
 }
 async function waitForIdle(timeout=12000){
-  const start=Date.now();
-  while(Date.now()-start<timeout){
-    const backdrop=d.querySelector('.MuiBackdrop-root');
-    const progress=d.querySelector('[role="progressbar"], .MuiCircularProgress-root');
-
-    const backdropVisible=backdrop &&
-      getComputedStyle(backdrop).visibility!=='hidden' &&
-      getComputedStyle(backdrop).display!=='none' &&
-      getComputedStyle(backdrop).opacity!=='0';
-
-    const progressVisible=progress &&
-      getComputedStyle(progress).visibility!=='hidden' &&
-      getComputedStyle(progress).display!=='none' &&
-      getComputedStyle(progress).opacity!=='0';
-
-    if(!backdropVisible && !progressVisible) return true;
-    await sleep(120);
+  let quietSince=0; const started=Date.now();
+  while(Date.now()-started<timeout){
+    const busy=[...d.querySelectorAll('.MuiBackdrop-root,[role="progressbar"],.MuiCircularProgress-root')]
+      .some(el=>vis(el)&&getComputedStyle(el).opacity!=='0'&&!el.closest('#ap3p_bar'));
+    if(!busy){ if(!quietSince) quietSince=Date.now(); if(Date.now()-quietSince>=200) return true; }
+    else quietSince=0;
+    await sleep(90);
   }
-  return true;
+  throw new Error('Adpoint ble ikke ferdig innen tidsfristen. Jobben er stoppet.');
 }
 
 /* ========= selection shortcuts + badge ========= */
@@ -1964,7 +1548,7 @@ _bestiltInt=setInterval(()=>{
   const m=t.match(/Bestilt(?:\s*\(BxH\))?\s*[:\-]?\s*(\d{2,4})\s*[x×]\s*(\d{2,4})/i);
   badge.textContent=m?`— ${m[1]}x${m[2]}`:'';
 },900);
-w.addEventListener('keydown',e=>{ if(e.altKey && e.key.toLowerCase()==='a'){ e.preventDefault(); btnRun.click(); }});
+listen(w,'keydown',e=>{ if(e.altKey && e.key.toLowerCase()==='a'){ if(e.target?.closest('input,textarea,[contenteditable="true"],.CodeMirror')) return; e.preventDefault(); btnRun.click(); }});
 
 /* restore minimized state */
 (function restoreMinState(){
@@ -1973,7 +1557,6 @@ w.addEventListener('keydown',e=>{ if(e.altKey && e.key.toLowerCase()==='a'){ e.p
 })();
 
 }catch(e){console.error(e);alert('Autofill-feil: '+(e&&e.message?e.message:e));}})();
-
 
 
 
