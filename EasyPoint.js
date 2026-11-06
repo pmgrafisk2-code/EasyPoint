@@ -1,6 +1,6 @@
 javascript:(()=>{try{
 /* ============================================================
-   EasyPoint 2.6 / Adpoint — kontrollert kø og massetillegging
+   EasyPoint 2.7 / Adpoint — kontrollert kø og massetillegging
    - Norsk/engelsk Adpoint, linje- og placeholder-ID ved hvert steg
    - Én jobb om gangen; stopp/lukk venter på pågående lagring
    - Legg til antall materiellplasser uten CSV; auto-opprett ved import
@@ -188,33 +188,88 @@ function setNativeValue(el, value) {
 
 
 /* ========= sizes from expanded ========= */
+/* Adpoint removes Expected size from child placeholders. Keep dimensions tied to IDs. */
+const placeholderFormats=new Map(),shareMasterTiles=new Map();
+function rawTileSize(tile){
+  const text=tile?.innerText||tile?.textContent||'';
+  const match=text.match(/(\d{2,4})\s*[x×]\s*(\d{2,4})/i)||tileOwnLabel(tile).match(/(\d{2,4})\s*[x×]\s*(\d{2,4})/i);
+  return match?`${match[1]}x${match[2]}`:'';
+}
+function shareTileInfo(tile){
+  const container=tile?.closest('.set-creativeContainer');
+  const badge=container&&[...container.children].find(el=>/related line items|relaterte.*linjer/i.test(el.getAttribute('title')||''));
+  const text=badge?.textContent.trim()||'';
+  return {isChild:/files cannot be uploaded to child\s+placeholders|upload your creative directly to the master placeholder/i.test(tile?.textContent||''),group:/^\d+$/.test(text)?text:null};
+}
+function tileMaterial(tile){
+  const row=dataRowForTile(tile);if(!row)return '';
+  const {rosenrIdx}=getHeaderIdxForRow(row);return row.children[rosenrIdx]?.textContent.trim()||'';
+}
+function findShareMasterTile(tile){
+  const info=shareTileInfo(tile);if(!info.group)return null;
+  if(!info.isChild)return tile;
+  const material=tileMaterial(tile),key=material+'|'+info.group,cached=shareMasterTiles.get(key);
+  if(cached?.isConnected){const current=shareTileInfo(cached);if(!current.isChild&&current.group===info.group&&tileMaterial(cached)===material)return cached;}
+  const masters=getAllTiles(d).filter(candidate=>{
+    if(!candidate.isConnected)return false;
+    const meta=shareTileInfo(candidate);return !meta.isChild&&meta.group===info.group&&tileMaterial(candidate)===material;
+  });
+  if(new Set(masters.map(placeholderId)).size!==1)return null;
+  const master=masters[0];shareMasterTiles.set(key,master);return master;
+}
+function recordShareMetadata(tile){
+  const info=shareTileInfo(tile),master=findShareMasterTile(tile);
+  return {isChild:info.isChild,shareGroupId:info.group,shareMasterId:master?placeholderId(master):null};
+}
 function sizesFromExpanded(details){
-  if(!details) return [];
-  const entries=[];
-  const tiles=getAllTiles(details);
-
-  const findSizeInText=s=>{
-    const m=String(s||'').match(/(\d{2,4})\s*[x×]\s*(\d{2,4})/i);
-    return m?`${m[1]}x${m[2]}`:'';
-  };
-  const findSizeInMapped=lbl=>{
-    const m=String(lbl||'').match(/mapped_(\d{2,4})\s*[x×]\s*(\d{2,4})(?:\b|[_\s])/i);
-    return m?`${m[1]}x${m[2]}`:'';
-  };
-
+  if(!details)return [];
+  const tiles=getAllTiles(details),entries=[];
+  const rowSizes=[...new Set(tiles.map(rawTileSize).filter(Boolean))];
   for(const tile of tiles){
-    const text=(tile.innerText||'');
-    const lbl=tileOwnLabel(tile);
-    let size=findSizeInText(text);
-    if(!size) size=findSizeInMapped(lbl);
-    if(!size) size=findSizeInText(lbl);
-    if(!size) continue;
-    const variant=tileVariant(tile);
-    const side=tileSide(tile);
-    entries.push({size:cs(size),variant,side,tile});
+    const row=dataRowForTile(tile),line=row&&rowId(row),id=placeholderId(tile),key=line+'|'+id;
+    const shared=recordShareMetadata(tile);
+    let size=rawTileSize(tile)||placeholderFormats.get(key)?.size||'';
+    if(!size&&shared.isChild){
+      const master=findShareMasterTile(tile);
+      if(master)size=rawTileSize(master)||placeholderFormats.get(rowId(dataRowForTile(master))+'|'+placeholderId(master))?.size||'';
+      if(!size&&rowSizes.length===1)size=rowSizes[0];
+    }
+    if(!size){
+      if(shared.isChild)throw new Error(`Kan ikke lese størrelsen til delt placeholder ${id}. Åpne linjen med masteren og hent annonser på nytt.`);
+      continue;
+    }
+    const entry={size:cs(size),variant:tileVariant(tile),side:tileSide(tile),tile,...shared};
+    placeholderFormats.set(key,{size:entry.size,variant:entry.variant,side:entry.side});entries.push(entry);
   }
   return entries;
 }
+async function resolveShareMasterRecord(record){
+  const current=await getFreshRecord(record.line,record.placeholder);
+  if(!current)throw new Error('Materiellplassen finnes ikke lenger. Hent annonser på nytt.');
+  if(!current.isChild)return {...current,material:record.material||tileMaterial(current.tile),slot:record.slot};
+  const tile=findShareMasterTile(current.tile),row=tile&&dataRowForTile(tile);
+  if(!tile||!row)throw new Error(`Masteren til delt placeholder ${record.placeholder} kunne ikke leses. Ingen deling er endret.`);
+  const line=rowId(row),master=await getFreshRecord(line,placeholderId(tile));
+  if(!master||master.isChild)throw new Error('Kunne ikke finne en entydig master for den delte plassen.');
+  return {...master,material:tileMaterial(master.tile),slot:record.slot};
+}
+function knownShareChildren(source){
+  const result=[];
+  for(const tile of getAllTiles(d)){
+    const info=shareTileInfo(tile);if(!info.isChild)continue;
+    const master=findShareMasterTile(tile);if(!master||placeholderId(master)!==source.placeholder)continue;
+    const row=dataRowForTile(tile);if(row)result.push({line:rowId(row),placeholder:placeholderId(tile),tile});
+  }
+  return result;
+}
+async function closeMaterialMenu(menu){
+  if(!menu||!vis(menu))return;
+  menu.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',bubbles:true}));
+  await sleep(50);
+  if(vis(menu)){d.body.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));d.body.click();}
+}
+
+
 function pickTilesForEntry(details,entry){
   let tiles=getAllTiles(details).filter(t=>tileHasSize(t,entry.size));
   if(entry.variant) tiles=tiles.filter(t=>(tileVariant(t)||null)===entry.variant);
@@ -1418,12 +1473,18 @@ async function editorForRecord(record){
   assertTarget(record);return editor;
 }
 async function inspectRecord(record){
-  const editor=await editorForRecord(record);
-  const value=await getEditorValueStable(editor);
-  assertTarget(record);
-  const fresh=await getFreshRecord(record.line,record.placeholder);
-  return {record:fresh,editor,value,occupied:!isEmpty3PValue(value)||tileHasMaterial(fresh.tile)};
+  const current=await getFreshRecord(record.line,record.placeholder);
+  if(!current)throw new Error('Materiellplassen finnes ikke lenger.');
+  if(current.isChild){
+    const master=await resolveShareMasterRecord(current),state=await inspectRecord(master);
+    return {...state,record:current,writeRecord:master};
+  }
+  const editor=await editorForRecord(current),value=await getEditorValueStable(editor);
+  assertTarget(current);
+  const fresh=await getFreshRecord(current.line,current.placeholder);
+  return {record:fresh,writeRecord:fresh,editor,value,occupied:!isEmpty3PValue(value)||tileHasMaterial(fresh.tile)};
 }
+
 function sameTag(a,b){return normalizeTagForCompare(a)===normalizeTagForCompare(b);}
 function takeExistingMatches(assets,states,kind){
   const remaining=assets.slice();let matched=0;
@@ -1484,6 +1545,7 @@ btnScan.onclick=()=>withJob('Skanner Adpoint…',async()=>{
   const ids=rows.map(rowId);
   if(ids.includes('?')||new Set(ids).size!==ids.length)throw new Error('Linje-ID-ene kunne ikke leses entydig fra kolonnen Line item.');
   const report=[],byId=new Map();
+  for(const row of rows){if(stopping)break;await ensureLineExpanded(row);}
   for(const id of ids){
     if(stopping)break;
     const records=await recordsForLine(id);
@@ -1590,7 +1652,7 @@ btnRun.onclick=()=>withJob('Legger inn materiell…',async()=>{
           requireRunning();
           const asset=settings.reuse&&remaining.length?remaining[placed%remaining.length]:remaining[placed];
           if(!asset)break;
-          const descriptor=desiredAssetDescriptor(group.kind,asset),previousWrite=writeLedger.get(state.record.placeholder);
+          const descriptor=desiredAssetDescriptor(group.kind,asset),previousWrite=writeLedger.get(state.record.shareMasterId||state.record.placeholder);
           if(previousWrite){
             if(!sameDesiredAsset(previousWrite,descriptor))throw new Error('En allerede delt materiellplass har fått ulike importversjoner. Ingen videre innlegging.');
             placed++;stats.matched++;setInfo(stats);LOG(`✓ Placeholder ${state.record.placeholder}: samme materiell er allerede sendt via en delt plass.`);continue;
@@ -1599,18 +1661,19 @@ btnRun.onclick=()=>withJob('Legger inn materiell…',async()=>{
           const check=await inspectRecord(state.record);
           if(settings.overwrite==='empty'&&check.occupied)throw new Error('En planlagt tom plass er blitt fylt. Jobben stoppet før overskriving.');
           if(!sameTag(check.value,state.value))throw new Error('Materiellinnholdet endret seg under kjøringen. Kontroller Adpoint.');
+          const writeRecord=check.writeRecord||check.record;
           if(group.kind==='image'){
-            const receipt=await uploadImageToTile(check.record,asset,check.occupied);
-            submittedWrites.push({kind:'image',record:check.record,beforeSignature:receipt.beforeSignature,file:asset});
+            const receipt=await uploadImageToTile(writeRecord,asset,check.occupied);
+            submittedWrites.push({kind:'image',record:writeRecord,beforeSignature:receipt.beforeSignature,file:asset});
           }else{
-            const editor=check.editor||await editorForRecord(check.record);
-            assertTarget(check.record);
+            const editor=check.editor||await editorForRecord(writeRecord);
+            assertTarget(writeRecord);
             if(!await pasteWithVerify(editor,asset.tag,1))throw new Error('Scriptet festet seg ikke i editoren.');
-            assertTarget(check.record);
-            await saveWithRetry(editor,check.record,asset.tag);
-            submittedWrites.push({kind:'script',record:check.record,expected:asset.tag});
+            assertTarget(writeRecord);
+            await saveWithRetry(editor,writeRecord,asset.tag);
+            submittedWrites.push({kind:'script',record:writeRecord,expected:asset.tag});
           }
-          writeLedger.set(state.record.placeholder,descriptor);placed++;stats.submitted++;stats.pending=submittedWrites.length;setInfo(stats);
+          writeLedger.set(writeRecord.placeholder,descriptor);placed++;stats.submitted++;stats.pending=submittedWrites.length;setInfo(stats);
           LOG(`✓ Linje ${id}, ${group.size}, placeholder ${state.record.placeholder}: ${group.kind==='image'?fileName(asset):tagLabel(asset)} — sendt til Adpoint.`);
         }
         if(!settings.reuse&&placed<remaining.length){
@@ -1690,7 +1753,7 @@ async function verifySubmittedWrites(receipts,stats,timeout=30000){
 let sharePlan=null;
 const shareCard=d.createElement('section');shareCard.className='ep-card';shareCard.id='ep-share-card';
 const shareHeading=d.createElement('h2');shareHeading.className='ep-heading';shareHeading.textContent='2. Del like størrelser';
-const shareHelp=d.createElement('p');shareHelp.className='ep-help';shareHelp.textContent='Plass 1 kobles med plass 1 på andre valgte linjer, plass 2 med plass 2 osv. Rekkefølgen følger Adpoint. Nye plasser hentes automatisk.';
+const shareHelp=d.createElement('p');shareHelp.className='ep-help';shareHelp.textContent='Plass 1 kobles med plass 1 på andre valgte linjer, plass 2 med plass 2 osv. Eksisterende koblinger beholdes. De øvrige plassene pares i rekkefølge. Nye plasser hentes automatisk.';
 const shareSummary=d.createElement('p');shareSummary.className='ep-help';shareSummary.setAttribute('aria-live','polite');
 const shareDetails=d.createElement('details'),shareDetailsLabel=d.createElement('summary');shareDetailsLabel.textContent='Vis koblingene';
 const shareList=d.createElement('div');shareList.style.cssText='display:flex;flex-direction:column;gap:8px;font-size:12px;max-height:220px;overflow:auto';
@@ -1703,33 +1766,75 @@ invalidateSharePlan=()=>{sharePlan=null;};
 function shareRecordKey(record){return record.line+'|'+record.placeholder;}
 function shareFormatKey(record){return [record.material,record.size,record.variant||'',record.side||''].join('|');}
 function shareGroupCandidates(records){
-  const perLine=new Map();
+  const formats=new Map(),result=[];
   for(const record of records){
     if(!record.material||!record.placeholder||!record.line||!record.size)throw new Error('Mangler Ext.nr., linje-ID, størrelse eller placeholder-ID i delingsgrunnlaget.');
-    const key=record.line+'|'+shareFormatKey(record);
-    if(!perLine.has(key))perLine.set(key,[]);perLine.get(key).push(record);
+    const key=shareFormatKey(record);if(!formats.has(key))formats.set(key,new Map());
+    const lines=formats.get(key);if(!lines.has(record.line))lines.set(record.line,[]);lines.get(record.line).push(record);
   }
-  const groups=new Map();
-  for(const items of perLine.values())items.forEach((record,index)=>{
-    const slot=index+1,key=shareFormatKey(record)+'|'+slot;
-    if(!groups.has(key))groups.set(key,{key,slot,size:record.size,variant:record.variant,side:record.side,material:record.material,peers:[]});
-    groups.get(key).peers.push({...record,slot});
-  });
-  return [...groups.values()].filter(group=>new Set(group.peers.map(record=>record.line)).size>1);
+  for(const [format,lines]of formats){
+    if(lines.size<2)continue;
+    const lists=[...lines.values()];
+    const score=items=>items.filter(record=>record.shareMasterId===record.placeholder&&!record.isChild).length*10+items.filter(record=>!record.isChild).length;
+    const anchor=lists.reduce((best,items)=>items.length>best.length||(items.length===best.length&&score(items)>score(best))?items:best,lists[0]);
+    const groups=anchor.map((record,index)=>({key:format+'|'+(index+1),slot:index+1,size:record.size,variant:record.variant,side:record.side,material:record.material,peers:[{...record,slot:index+1}],root:record.shareMasterId||null}));
+    const byMaster=new Map();
+    for(const group of groups){byMaster.set(group.peers[0].placeholder,group);if(group.root)byMaster.set(group.root,group);}
+    for(const items of lists){
+      if(items===anchor)continue;
+      const assigned=new Set(),used=new Set();
+      const assign=(group,record)=>{
+        group.peers.push({...record,slot:group.slot});assigned.add(group);used.add(record);
+        if(record.shareMasterId&&!group.root){group.root=record.shareMasterId;byMaster.set(group.root,group);}
+      };
+      // Existing links take precedence over changing card order and missing child size text.
+      for(const record of items){
+        const group=byMaster.get(record.shareMasterId||record.placeholder);
+        if(group){
+          if(assigned.has(group))throw new Error(`Linje ${record.line} har flere plasser koblet til samme master i ${record.size}. Ingen automatisk sammenslåing av versjoner.`);
+          assign(group,record);
+        }
+      }
+      for(const record of items.filter(record=>!used.has(record)&&record.shareMasterId)){
+        const group=groups.find(group=>!assigned.has(group)&&!group.root);
+        if(!group)throw new Error(`Eksisterende mastergrupper i ${record.size} kan ikke pares uten å endre tidligere koblinger.`);
+        assign(group,record);
+      }
+      for(const record of items.filter(record=>!used.has(record))){
+        const group=groups.find(group=>!assigned.has(group));if(group)assign(group,record);
+      }
+    }
+    result.push(...groups.filter(group=>new Set(group.peers.map(record=>record.line)).size>1));
+  }
+  return result;
 }
+
+
 function sameShareContent(a,b){
-  if(a.occupied&&b.occupied&&((a.contentKey&&a.contentKey===b.contentKey)||(a.linkKey&&a.linkKey===b.linkKey)))return true;
+  if(a.occupied&&b.occupied&&((a.record?.shareMasterId&&a.record.shareMasterId===b.record?.shareMasterId)||(a.contentKey&&a.contentKey===b.contentKey)||(a.linkKey&&a.linkKey===b.linkKey)))return true;
   if(!a.occupied||!b.occupied)return !a.occupied&&!b.occupied;
   if(!isEmpty3PValue(a.value)||!isEmpty3PValue(b.value))return !isEmpty3PValue(a.value)&&!isEmpty3PValue(b.value)&&sameTag(a.value,b.value);
   return !!a.signature&&a.signature===b.signature;
 }
 function selectShareSource(group,states){
+  const masterIds=new Set(states.map(state=>state.record.shareMasterId).filter(Boolean));
+  if(masterIds.size>1)return {conflict:true,hardConflict:true,group,reason:'Flere eksisterende mastergrupper på samme plassnummer. Ingen grupper slås sammen automatisk.'};
+  let authoritative=null;
+  if(masterIds.size){
+    const id=[...masterIds][0];authoritative=states.find(state=>state.record.placeholder===id&&!state.record.isChild);
+    if(!authoritative)return {conflict:true,hardConflict:true,group,reason:'Plassen er allerede delt med en master utenfor dette plassnummeret eller utvalget.'};
+  }
   const filled=states.filter(state=>state.occupied);
   if(filled.some(state=>!sameShareContent(state,filled[0])))return {conflict:true,group,reason:'Ulikt eksisterende materiell på samme plassnummer.'};
-  const source=(filled[0]||states[0]).record;
-  const targets=states.filter(state=>state.record.line!==source.line&&state.record.placeholder!==source.placeholder).map(state=>state.record);
+  if(authoritative&&!authoritative.occupied&&filled.length)return {conflict:true,hardConflict:true,group,reason:'Eksisterende master er tom mens en annen plass har materiell. Ingen automatisk overskriving.'};
+  const selectedSource=authoritative||filled.find(state=>!state.record.isChild)||states.find(state=>!state.record.isChild);
+  if(!selectedSource)return {conflict:true,hardConflict:true,group,reason:'Gruppen inneholder bare child placeholders; masteren må være med i utvalget.'};
+  const source=selectedSource.record;
+  const targets=states.filter(state=>state.record.line!==source.line&&state.record.placeholder!==source.placeholder&&!(state.record.isChild&&state.record.shareMasterId===source.placeholder)).map(state=>state.record);
   return {group,source,targets,states,already:states.length-1-targets.length};
 }
+
+
 function materialForLine(id){
   const rows=findRowsByIdAll(id);if(rows.length!==1)throw new Error(`Linje ${id} er ikke entydig.`);
   const {rosenrIdx}=getHeaderIdxForRow(rows[0]);
@@ -1738,9 +1843,10 @@ function materialForLine(id){
   return material;
 }
 async function inspectShareRecord(record){
-  const state=await inspectRecord(record);
+  const readFrom=record.isChild?await resolveShareMasterRecord(record):record;
+  const state=await inspectRecord(readFrom);
   const signature=materialSignature(state.record.tile);
-  return {...state,record:{...state.record,material:record.material,slot:record.slot},signature,contentKey:knownImageFile(record,signature)};
+  return {...state,record:{...record,material:record.material,slot:record.slot},signature,contentKey:knownImageFile(readFrom,signature)};
 }
 function getShareControls(){
   const labels=[...d.querySelectorAll('p,span,div')].filter(el=>!el.children.length&&vis(el)&&/^(?:sharing with|deler med|deles med)\s*:/i.test(el.textContent.trim()));
@@ -1776,6 +1882,7 @@ function shareTargetInputs(){
 }
 async function openShareForRecord(record){
   const fresh=await getFreshRecord(record.line,record.placeholder);
+  if(fresh?.isChild)throw new Error('Share må åpnes fra masteren, ikke fra en child placeholder. Unshare blir ikke valgt automatisk.');
   if(!fresh||fresh.size!==record.size||(fresh.variant||null)!==(record.variant||null)||(fresh.side||null)!==(record.side||null))throw new Error('Kildemateriellet har endret seg. Hent delingsplanen på nytt.');
   const buttons=[...fresh.tile.querySelectorAll('button[aria-haspopup="true"]')].filter(button=>vis(button)&&!isDisabled(button));
   if(buttons.length!==1)throw new Error(`Fant ikke én menyknapp på placeholder ${record.placeholder}.`);
@@ -1786,8 +1893,8 @@ async function openShareForRecord(record){
     return menus.length===1?menus[0]:null;
   },4000,80);
   if(!menu)throw new Error('Menyen for kildemateriellet åpnet seg ikke entydig.');
-  const shares=[...menu.querySelectorAll('[role="menuitem"]')].filter(el=>/^(share|del materiell)$/i.test(el.textContent.trim())&&!isDisabled(el));
-  if(shares.length!==1)throw new Error('Fant ikke ett tilgjengelig Share-valg for kilden.');
+  const shares=[...menu.querySelectorAll('[role="menuitem"]')].filter(el=>/^(share(?:\s*\/\s*unshare)?|del materiell)$/i.test(el.textContent.trim())&&!isDisabled(el));
+  if(shares.length!==1){await closeMaterialMenu(menu);throw new Error('Fant ikke ett tilgjengelig Share/Unshare-valg på masteren. Unshare blir ikke valgt automatisk.');}
   shares[0].click();
   if(!await waitFor(()=>getShareControls(),5000,80))throw new Error('Share-flyten åpnet seg ikke.');
 }
@@ -1796,8 +1903,8 @@ async function readShareGroup(group){
   for(const record of group.peers){
     requireRunning();
     const material=materialForLine(record.line);
-    const current=(await recordsForLine(record.line)).filter(entry=>entry.size===group.size&&(entry.variant||'')===(group.variant||'')&&(entry.side||'')===(group.side||''))[group.slot-1];
-    if(material!==record.material||!current||current.placeholder!==record.placeholder)throw new Error('Materiellplassene har endret seg siden planen ble hentet. Hent planen på nytt.');
+    const current=(await recordsForLine(record.line)).find(entry=>entry.placeholder===record.placeholder);
+    if(material!==record.material||!current||current.size!==group.size||(current.variant||'')!==(group.variant||'')||(current.side||'')!==(group.side||''))throw new Error('Materiellplassene har endret seg siden planen ble hentet. Hent planen på nytt.');
     states.push(await inspectShareRecord({...current,material,slot:group.slot}));
   }
   return states;
@@ -1811,8 +1918,9 @@ async function buildSharePlan(ids,options={}){
     const states=await readShareGroup(group);
     if(options.include&&!options.include(group,states))continue;
     let choice=selectShareSource(group,states);
+    if(choice.hardConflict){conflicts.push(choice);LOG(`! Share ${group.size}, plass ${group.slot}: ${choice.reason}`);continue;}
     if(!choice.conflict&&!choice.targets.length){already+=choice.already;continue;}
-    const anchor=(states.find(state=>state.occupied)||states[0]).record;
+    const anchor=choice.source||(states.find(state=>state.occupied&&!state.record.isChild)||states.find(state=>!state.record.isChild)||states[0]).record;
     try{
       const native=await readExistingShareTargets(anchor);
       markExistingShareStates(states,anchor,native.existingKeys);
@@ -1856,24 +1964,25 @@ async function executeShareGroup(planned){
       const preserved=initial.existingKeys.has(key)&&key!==shareRecordKey(planned.source);
       if(!state||(!preserved&&(state.occupied!==old.occupied||!sameTag(state.value,old.value)||state.signature!==old.signature)))throw new Error('Materiellinnholdet har endret seg siden planen ble hentet. Hent planen på nytt.');
     }
-    const wanted=new Set(planned.targets.map(shareRecordKey)),expected=new Set([...initial.existingKeys,...wanted]);
+    const expected=new Set(initial.checkedKeys);
     let added=0,already=0;
     for(const target of planned.targets){
       requireRunning();
+      if(initial.existingKeys.has(shareRecordKey(target))){already++;continue;}
       const matches=shareTargetInputs().filter(choice=>shareRecordKey(choice)===shareRecordKey(target));
       if(matches.length!==1)throw new Error(`Placeholder ${target.placeholder} er ikke et entydig Share-mål for denne kilden.`);
       const choice=matches[0];
-      if(choice.input.checked){already++;continue;}
+      if(initial.existingKeys.has(shareRecordKey(target))||choice.input.checked){already++;continue;}
       if(choice.size!==planned.source.size||(choice.variant||null)!==(planned.source.variant||null)||(choice.side||null)!==(planned.source.side||null)||isDisabled(choice.input))throw new Error('Adpoint tilbyr ikke målplassen som et kompatibelt Share-valg.');
       choice.input.click();
       if(!await waitFor(()=>shareTargetInputs().find(item=>shareRecordKey(item)===shareRecordKey(target))?.input.checked,2500,70))throw new Error('Share-avkryssingen festet seg ikke.');
-      added++;
+      expected.add(shareRecordKey(target));added++;
     }
     if(!added)return {shared:0,already};
     requireRunning();
     const controls=await waitFor(()=>{const value=getShareControls();return value&&!isDisabled(value.confirm)?value:null;},4000,80);
     const checked=shareTargetInputs().filter(choice=>choice.input.checked);
-    if(!controls||controls.count!==expected.size||checked.length!==expected.size||checked.some(choice=>!expected.has(shareRecordKey(choice))))throw new Error('Share-valgene samsvarer ikke med eksisterende koblinger og nye mål. Ingen bekreftelse ble sendt.');
+    if(!controls||controls.count!==initial.offset+expected.size||checked.length!==expected.size||checked.some(choice=>!expected.has(shareRecordKey(choice))))throw new Error('Share-valgene samsvarer ikke med eksisterende koblinger og nye mål. Ingen bekreftelse ble sendt.');
     controls.confirm.click();confirmClicked=true;
     const closed=await waitFor(()=>{
       const error=visibleAdpointError();if(error)throw new Error('Adpoint avviste Share: '+error.textContent.trim().slice(0,200));
@@ -1917,7 +2026,7 @@ function rememberVerifiedImage(receipt){
 function knownImageFile(record,signature){
   const direct=verifiedImageEvidence.get(shareRecordKey(record));
   if(direct&&direct.signature===signature)return direct.file;
-  for(const item of verifiedImageEvidence.values())if(item.placeholder===record.placeholder&&item.signature===signature)return item.file;
+  for(const item of verifiedImageEvidence.values())if((item.placeholder===record.placeholder||item.placeholder===record.shareMasterId)&&item.signature===signature)return item.file;
   return null;
 }
 function markExistingShareStates(states,source,existingKeys){
@@ -1927,12 +2036,14 @@ function markExistingShareStates(states,source,existingKeys){
 function checkedShareState(source){
   const controls=getShareControls();if(!controls)throw new Error('Share-flyten er ikke åpen.');
   const choices=shareTargetInputs(),checked=choices.filter(choice=>choice.input.checked);
-  if(!Number.isSafeInteger(controls.count)||controls.count!==checked.length)throw new Error('Eksisterende Share-valg kunne ikke leses entydig. Ingen delinger er endret.');
+  const known=knownShareChildren(source),offset=controls.count-checked.length;
+  if(!Number.isSafeInteger(controls.count)||offset<0||offset>known.length)throw new Error('Eksisterende Share-valg kunne ikke leses entydig. Ingen delinger er endret.');
   if(checked.some(choice=>choice.size!==source.size))throw new Error('Eksisterende Share-valg inneholder en annen størrelse. Ingen delinger er endret.');
-  return {controls,choices,checked,existingKeys:new Set(checked.map(shareRecordKey))};
+  return {controls,choices,checked,offset,checkedKeys:new Set(checked.map(shareRecordKey)),existingKeys:new Set([...checked.map(shareRecordKey),...known.map(shareRecordKey)])};
 }
 async function readExistingShareTargets(source){
   await cancelShareMode();
+  if(source.isChild)source=await resolveShareMasterRecord(source);
   try{await openShareForRecord(source);const state=checkedShareState(source);return {existingKeys:state.existingKeys};}
   finally{await cancelShareMode();}
 }
@@ -1945,9 +2056,9 @@ async function checkSharedImportConflicts(ids,map,images,settings){
     requireRunning();
     for(const group of workGroups(id,await recordsForLine(id),map,images))group.records.forEach((record,index)=>{
       const asset=settings.reuse?group.assets[index%group.assets.length]:group.assets[index];if(!asset)return;
-      const descriptor=desiredAssetDescriptor(group.kind,asset),old=desired.get(record.placeholder);
+      const descriptor=desiredAssetDescriptor(group.kind,asset),old=desired.get(record.shareMasterId||record.placeholder);
       if(old&&!sameDesiredAsset(old,descriptor))throw new Error(`Placeholder ${record.placeholder} er allerede delt, men importen angir ulikt materiell på de koblede linjene. Ingen innlegging er startet.`);
-      desired.set(record.placeholder,descriptor);
+      desired.set(record.shareMasterId||record.placeholder,descriptor);
       const key=shareRecordKey(record);perRecord.set(key,{record,descriptor});
       if(!perSize.has(record.size))perSize.set(record.size,new Map());perSize.get(record.size).set(key,{record,descriptor});
     });
