@@ -1,6 +1,6 @@
 javascript:(()=>{try{
 /* ============================================================
-   EasyPoint 2.0 / Adpoint — kontrollert kø og massetillegging
+   EasyPoint 2.1 / Adpoint — kontrollert kø og massetillegging
    - Norsk/engelsk Adpoint, linje- og placeholder-ID ved hvert steg
    - Én jobb om gangen; stopp/lukk venter på pågående lagring
    - Legg til antall materiellplasser uten CSV; auto-opprett ved import
@@ -12,6 +12,7 @@ const previous=w.__easyPoint;
 if(previous?.busy){ previous.focus?.(); alert('EasyPoint arbeider fortsatt. Stopp jobben og vent før du åpner på nytt.'); return; }
 previous?.destroy?.();
 const life=new AbortController();
+let refreshSimpleUI=()=>{};
 const app={busy:false,closing:false,focus:()=>d.getElementById('ap3p_bar')?.scrollIntoView({block:'nearest'})};
 class UncertainMutationError extends Error {constructor(message){super(message);this.name='UncertainMutationError';this.uncertain=true;}}
 w.__easyPoint=app;
@@ -797,7 +798,7 @@ async function uploadImageToTile(record,file){
   d.head.appendChild(st);
 })();
 
-const UI_STATE_KEY='ap3p_ui_state_v1';
+const UI_STATE_KEY='ap3p_ui_state_v2';
 function loadUIState(){const st=G(UI_STATE_KEY,null); return (st&&typeof st==='object')?st:null;}
 function saveUIState(){
   try{
@@ -815,7 +816,7 @@ function saveUIState(){
 
 let ui=d.getElementById('ap3p_bar'); if(ui) ui.remove();
 ui=d.createElement('div'); ui.id='ap3p_bar';
-ui.style.cssText='position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#0e0f13;color:#e6e6e6;border:1px solid #2a2d37;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.45);max-width:96vw;min-width:520px;max-height:90vh;';
+ui.style.cssText='position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#0e0f13;color:#e6e6e6;border:1px solid #2a2d37;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.45);max-width:96vw;min-width:420px;max-height:90vh;';
 
 const hdr=d.createElement('div');
 hdr.style.cssText='cursor:move;user-select:none;display:flex;align-items:center;gap:10px;padding:8px 10px;background:#161922;border-radius:12px 12px 0 0;border-bottom:1px solid #2a2d37';
@@ -837,7 +838,7 @@ body.style.cssText='padding:8px 10px;display:flex;gap:10px;align-items:center;fl
 const info=d.createElement('span'); info.textContent='Linjer: —'; info.style.opacity='.9';
 const btnCSV=d.createElement('button'); btnCSV.textContent='Importer CSV/JSON'; btnCSV.style.cssText='cursor:pointer;border:1px solid #2a2d37;border-radius:8px;padding:6px 10px;background:#1a1d27;color:#e6e6e6';
 const btnPaste=d.createElement('button'); btnPaste.textContent='Lim inn fra Excel'; btnPaste.style.cssText='cursor:pointer;border:1px solid #2a2d37;border-radius:8px;padding:6px 10px;background:#1a1d27;color:#e6e6e6';
-const file=d.createElement('input'); file.type='file'; file.accept='.csv,.json,.txt'; file.style.display='none';
+const file=d.createElement('input'); file.type='file'; file.accept='.csv,.json,.txt,image/*,.psd,.tif,.tiff,.webp'; file.multiple=true; file.style.display='none';
 const drop=d.createElement('div'); drop.textContent='Slipp CSV/JSON/bilder her'; drop.style.cssText='flex:1 1 100%;border:1px dashed #3a3f52;border-radius:8px;height:56px;display:flex;align-items:center;justify-content:center;opacity:.9';
 const listWrap=d.createElement('div'); listWrap.style.cssText='flex:1 1 100%';
 const listCtrls=d.createElement('div'); listCtrls.id='ap3p_list_ctrls'; listCtrls.style.cssText='display:flex;align-items:center;gap:8px;margin:2px 0 4px 0;opacity:.9';
@@ -852,18 +853,18 @@ const log=d.createElement('div'); log.style.cssText='height:200px;overflow:auto;
 ui.append(hdr,body,listWrap,log); d.body.appendChild(ui);
 
 const LOG=m=>{log.textContent+=m+'\n'; log.scrollTop=log.scrollHeight;};
-const setInfo=o=>{info.textContent=`Linjer:${o.items}  Ferdig:${o.done}  Lagret:${o.saved||0}  Nye:${o.added||0}  Hoppet:${o.skip||0}  Feil:${o.err||0}  Usikkert:${o.uncertain||0}`};
+const setInfo=o=>{app.lastStats={...o};info.textContent=`Linjer:${o.items}  Ferdig:${o.done}  Lagret:${o.saved||0}  Nye:${o.added||0}  Hoppet:${o.skip||0}  Feil:${o.err||0}  Usikkert:${o.uncertain||0}`;refreshSimpleUI();};
 body.append(info,btnCSV,btnPaste,file,drop);
 
 /* ===== Apply saved UI state ===== */
 (function applyInitialUIState(){
   const st=loadUIState();
-  const defW=660, defH=520;
-  const vw=Math.max(520, Math.min(defW, Math.floor(window.innerWidth*0.92)));
+  const defW=560, defH=660;
+  const vw=Math.max(420, Math.min(defW, Math.floor(window.innerWidth*0.92)));
   const vh=Math.max(260, Math.min(defH, Math.floor(window.innerHeight*0.85)));
 
   if(st?.w && st?.h){
-    const ww=clamp(st.w,520,Math.floor(window.innerWidth*0.96));
+    const ww=clamp(st.w,420,Math.floor(window.innerWidth*0.96));
     const hh=clamp(st.h,160,Math.floor(window.innerHeight*0.90));
     ui.style.width=ww+'px'; ui.style.height=hh+'px';
   }else{
@@ -905,15 +906,9 @@ function flash(el){
 }
 
 /* ===== resize/drag/minimize ===== */
-function adjustHeights(totalH){
-  if(ui.getAttribute('data-min')==='1') return;
-  const hdrH=hdr.getBoundingClientRect().height;
-  const bodyH=body.offsetParent?body.getBoundingClientRect().height:0;
-  const lstH=(listWrap.style.display==='none')?0:listWrap.getBoundingClientRect().height;
-  const pad=24;
-  const logH=Math.max(110,totalH-(hdrH+bodyH+lstH+pad));
-  log.style.height=logH+'px';
-  ui.style.overflow='auto';
+function adjustHeights(){
+  if(ui.getAttribute('data-min')==='1')return;
+  ui.style.overflowY='auto';ui.style.overflowX='hidden';
 }
 (function makeDraggable(handle,box){
   let sx=0,sy=0,ox=0,oy=0,drag=false;
@@ -950,9 +945,9 @@ function adjustHeights(totalH){
   function onMove(e){
     if(!rs)return;
     const dx=e.clientX-rs.sx, dy=e.clientY-rs.sy; let x=rs.x,y=rs.y,wv=rs.w,hv=rs.h;
-    if(/e/.test(rs.dir)) wv=Math.max(520,rs.w+dx);
+    if(/e/.test(rs.dir)) wv=Math.max(420,rs.w+dx);
     if(/s/.test(rs.dir)) hv=Math.max(180,rs.h+dy);
-    if(/w/.test(rs.dir)){ wv=Math.max(520,rs.w-dx); x=rs.x+dx; }
+    if(/w/.test(rs.dir)){ wv=Math.max(420,rs.w-dx); x=rs.x+dx; }
     if(/n/.test(rs.dir)){ hv=Math.max(180,rs.h-dy); y=rs.y+dy; }
     Object.assign(box.style,{width:wv+'px',height:hv+'px',left:x+'px',top:y+'px',right:'auto',bottom:'auto'});
     adjustHeights(hv);
@@ -1001,8 +996,8 @@ function setMinimized(min){
   const lastH=parseInt(ui.getAttribute('data-last-h')||'',10);
   const lastW=parseInt(ui.getAttribute('data-last-w')||'',10);
 
-  const targetH=clamp((Number.isFinite(lastH)&&lastH>80)?lastH:(st.h||520),180,Math.floor(window.innerHeight*0.90));
-  const targetW=clamp((Number.isFinite(lastW)&&lastW>200)?lastW:(st.w||660),520,Math.floor(window.innerWidth*0.96));
+  const targetH=clamp((Number.isFinite(lastH)&&lastH>80)?lastH:(st.h||660),180,Math.floor(window.innerHeight*0.90));
+  const targetW=clamp((Number.isFinite(lastW)&&lastW>200)?lastW:(st.w||560),420,Math.floor(window.innerWidth*0.96));
 
   ui.style.height=targetH+'px';
   ui.style.width =targetW+'px';
@@ -1031,20 +1026,21 @@ function renderMapChip(){
   let imgCount=0; imagePool.forEach(a=>imgCount+=a.length);
   mapChip.className=(csvCount||imgCount)?'chip chip-ok':'chip chip-none';
   mapChip.textContent=(csvCount||imgCount)?`CSV: ${csvCount}  Bilder: ${imgCount} ✓`:'CSV/Bilder: ingen';
+  refreshSimpleUI();
 }
 function saveMap(arr){
   mapping=arr;
   S(MAP_KEY,mapping);
   renderMapChip();
   flash(mapChip); flash(drop);
-  showToast('Mapping oppdatert',`CSV-rader: ${mapping.length}`);
+  showToast('Importert',`CSV-rader: ${mapping.length}`);
 }
 function clearMap(){
   mapping=[];
   S(MAP_KEY,mapping);
   renderMapChip();
   flash(mapChip);
-  showToast('Mapping tømt');
+  showToast('Importen er tømt');
 }
 mapClear.onclick=()=>{clearMap();imagePool.clear();renderMapChip()};
 renderMapChip();
@@ -1133,19 +1129,8 @@ syncReuseWithAddExtra();
 
 /* ========= import UI ========= */
 btnCSV.onclick=()=>file.click();
-file.onchange=e=>{
-  const f=e.target.files?.[0]; if(!f) return;
-  const r=new FileReader();
-  r.onload=ev=>{
-    const text=String(ev.target.result||'');
-    if(f.name.toLowerCase().endsWith('.json')){
-      try{saveMap(normalizeJSON(JSON.parse(text)))}catch{alert('Ugyldig JSON')}
-    }else{
-      try{saveMap(rowsToMap(parseCSV(text)))}catch(err){alert(err.message)}
-    }
-  };
-  r.readAsText(f,'utf-8');
-  file.value='';
+file.onchange=async e=>{
+  const files=[...(e.target.files||[])];file.value='';await importFiles(files);
 };
 btnPaste.onclick=()=>{
   const go=t=>{try{saveMap(rowsToMap(parseCSV(t)))}catch(e){alert(e.message)}};
@@ -1164,18 +1149,21 @@ btnPaste.onclick=()=>{
 function isCSVFile(f){return /\.csv$/i.test(f.name)||f.type==='text/csv'}
 function isJSONFile(f){return /\.json$/i.test(f.name)||f.type==='application/json'}
 function readFileText(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result||''));r.onerror=rej;r.readAsText(file,'utf-8')})}
-drop.addEventListener('drop',async e=>{
-  e.preventDefault();drop.style.background='transparent';
-  const files=[...(e.dataTransfer?.files||[])]; if(!files.length) return;
-
-  const csvs=files.filter(isCSVFile);
-  const jsons=files.filter(isJSONFile);
-  const imgs=files.filter(f=>/^image\//.test(f.type)||/\.(psd|tiff?|webp)$/i.test(f.name));
-
-  try{for(const f of csvs){const text=await readFileText(f);saveMap(rowsToMap(parseCSV(text)))}}catch(err){alert('CSV-import feilet: '+(err?.message||err))}
-  try{for(const f of jsons){const text=await readFileText(f);saveMap(normalizeJSON(JSON.parse(text)))}}catch(err){alert('JSON-import feilet: '+(err?.message||err))}
-  if(imgs.length) addImagesToPool(imgs);
-});
+async function importFiles(files){
+  if(app.busy||!files.length)return;
+  const images=files.filter(f=>/^image\//.test(f.type)||/\.(psd|tiff?|webp|png|jpe?g|gif|bmp|svg)$/i.test(f.name));
+  const data=files.filter(f=>isCSVFile(f)||isJSONFile(f)||/\.txt$/i.test(f.name));
+  try{
+    const entries=[];
+    for(const f of data){const text=await readFileText(f);entries.push(...(isJSONFile(f)?normalizeJSON(JSON.parse(text)):rowsToMap(parseCSV(text))));}
+    if(app.busy)return;
+    if(entries.length)saveMap(entries);
+    if(images.length)addImagesToPool(images);
+    if(!data.length&&!images.length)showToast('Ukjent filtype','Velg CSV, JSON eller bildefiler.');
+    refreshSimpleUI();
+  }catch(error){showToast('Kunne ikke importere',error.message);LOG('! Import feilet: '+error.message);}
+}
+drop.addEventListener('drop',async e=>{e.preventDefault();drop.style.background='transparent';await importFiles([...(e.dataTransfer?.files||[])]);});
 
 /* ========= shared queue, scan, bulk placeholders and autofill ========= */
 let scanned=[];
@@ -1185,6 +1173,7 @@ function tagLabel(entry){return typeof entry==='string'?entry.slice(0,80):(entry
 
 function saveSelection(){S('ap3p_sel_ids',[...selected]);}
 function refreshList(){
+  refreshSimpleUI();
   list.replaceChildren();
   if(!scanned.length){const empty=d.createElement('div');empty.className='muted';empty.textContent='Trykk Skann for å hente linjer og tilgjengelige størrelser.';list.append(empty);return;}
   for(const item of scanned){
@@ -1193,7 +1182,7 @@ function refreshList(){
     const id=d.createElement('span');id.className='id';id.textContent=item.id;
     const sizes=d.createElement('span');sizes.className='sizes';sizes.textContent=item.label;
     row.append(cb,id,sizes);list.append(row);
-    cb.onchange=()=>{if(cb.checked)selected.add(item.id);else selected.delete(item.id);saveSelection();};
+    cb.onchange=()=>{if(cb.checked)selected.add(item.id);else selected.delete(item.id);saveSelection();refreshSimpleUI();};
   }
 }
 btnAll.onclick=()=>{if(app.busy)return;selected=new Set(scanned.map(x=>x.id));saveSelection();refreshList();};
@@ -1234,7 +1223,7 @@ function addBulkRow(){
   const remove=d.createElement('button');remove.textContent='×';remove.title='Fjern størrelse';
   const control={row,select,count,remove};bulkControls.push(control);
   remove.onclick=()=>{if(app.busy)return;row.remove();bulkControls.splice(bulkControls.indexOf(control),1);adjustHeights(ui.getBoundingClientRect().height);};
-  row.append(select,count,remove);bulkRows.append(row);refreshBulkOptions();adjustHeights(ui.getBoundingClientRect().height);
+  const quantity=d.createElement('label');quantity.style.cssText='display:flex;align-items:center;gap:5px;font-size:12px;color:#a9b3c4';const quantityText=d.createElement('span');quantityText.textContent='Antall';quantity.append(quantityText,count);remove.setAttribute('aria-label','Fjern størrelse');row.append(select,quantity,remove);bulkRows.append(row);refreshBulkOptions();adjustHeights(ui.getBoundingClientRect().height);
 }
 bulkPlus.onclick=addBulkRow;addBulkRow();
 
@@ -1250,15 +1239,15 @@ function setBusy(value){
 }
 async function withJob(label,fn){
   if(app.busy)return;
-  stopping=false;setBusy(true);showToast(label);
+  stopping=false;app.jobLabel=label;app.lastError='';app.lastStats=null;setBusy(true);showToast(label);
   try{await fn();}
-  catch(error){LOG('! '+(error?.message||error));showToast('Jobben er stoppet',error?.message||String(error));}
+  catch(error){app.lastError=error?.message||String(error);LOG('! '+app.lastError);showToast('Jobben er stoppet',app.lastError);}
   finally{setBusy(false);if(app.closing)app.destroy();}
 }
 function requireRunning(){if(stopping)throw new Error('Stoppet av bruker. Pågående endring er avsluttet.');}
 btnStop.onclick=()=>{
   if(!app.busy)return;
-  stopping=true;btnStop.disabled=true;
+  stopping=true;btnStop.disabled=true;refreshSimpleUI();
   showToast('Stopper…','Venter på at pågående tillegging eller lagring blir avsluttet.');
 };
 
@@ -1429,7 +1418,7 @@ async function refreshAfterMutation(ids){
   _lastPreview=byId;refreshList();
 }
 
-btnRun.onclick=()=>withJob('Autofyll startet…',async()=>{
+btnRun.onclick=()=>withJob('Legger inn materiell…',async()=>{
   const ids=selectedIds();if(!ids.length)throw new Error('Skann og velg minst én linje først.');
   if(!mapping.length&&!imagePool.size)throw new Error('Importer CSV/JSON eller bilder først.');
   const map=mapping.map(x=>({...x,lineIds:[...(x.lineIds||[])]}));
@@ -1508,6 +1497,151 @@ btnRun.onclick=()=>withJob('Autofyll startet…',async()=>{
 refreshList();btnBulk.disabled=true;
 
 
+/* ========= simple task-based interface ========= */
+(function simplifyInterface(){
+  ui.classList.add('ap-simple');
+  const css=d.createElement('style');css.textContent=`
+#ap3p_bar.ap-simple{font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;min-width:420px;isolation:isolate}
+#ap3p_bar.ap-simple *{box-sizing:border-box}
+#ap3p_bar.ap-simple [hidden]{display:none!important}
+#ap3p_bar.ap-simple button,#ap3p_bar.ap-simple input,#ap3p_bar.ap-simple select{font:inherit}
+#ap3p_bar.ap-simple button:disabled{opacity:.45;cursor:default!important}
+#ap3p_bar.ap-simple button:focus-visible,#ap3p_bar.ap-simple summary:focus-visible,#ap3p_bar.ap-simple input:focus-visible,#ap3p_bar.ap-simple select:focus-visible{outline:2px solid #67caff;outline-offset:3px}
+#ap3p_bar .ep-card{border:1px solid #303644;border-radius:10px;padding:13px;background:#141820;display:flex;flex-direction:column;gap:10px}
+#ap3p_bar .ep-heading{font-weight:650;color:#f4f6fa;font-size:14px;margin:0}
+#ap3p_bar .ep-help{color:#a9b3c4;font-size:12px;margin:0}
+#ap3p_bar .ep-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#ap3p_bar .ep-mode{display:flex;gap:5px;padding:4px;border:1px solid #303644;border-radius:10px;background:#0b0e14}
+#ap3p_bar .ep-mode button{flex:1;border:0;border-radius:7px;padding:10px 8px;background:transparent;color:#a9b3c4;cursor:pointer;font-weight:600}
+#ap3p_bar .ep-mode button[aria-pressed="true"]{background:#253348;color:#f4f8ff;box-shadow:0 1px 4px #0005}
+#ap3p_bar summary{cursor:pointer;color:#c4cedc;font-weight:500;list-style-position:inside;padding:8px 0}
+#ap3p_bar summary::marker{color:#7d8ba0}
+#ap3p_bar .ep-options>div{display:flex;flex-direction:column;gap:12px;padding:8px 0 5px}
+#ap3p_bar .ep-options label{margin:0!important;align-items:flex-start!important;gap:8px!important;opacity:1!important}
+#ap3p_bar .ep-options label input{margin-top:3px;flex:none}
+#ap3p_bar .ep-options small{display:block;color:#9ba8ba;margin-top:3px;font-size:11px;line-height:1.4}
+#ap3p_bar .ep-action{display:flex;flex-direction:column;gap:9px;padding-top:12px;border-top:1px solid #303644}
+#ap3p_bar .ep-action>button{width:100%;padding:11px 14px!important;font-size:14px!important;border-radius:8px!important}
+#ap3p_bar .ep-status{color:#a9b3c4;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}
+#ap3p_bar .ep-policy{color:#a9b3c4;font-size:12px}
+#ap3p_bar .ep-policy[data-replace="true"]{color:#ffca8b}
+#ap3p_bar #ap3p_list .item{padding:7px 4px;gap:8px;align-items:flex-start}
+#ap3p_bar #ap3p_list .sizes{font:12px/1.4 system-ui,sans-serif;color:#a9b3c4}
+#ap3p_bar #ap3p_list .id{font-size:12px;min-width:66px;color:#e1e7ef}
+#ap3p_bar #ap3p_list input{margin-top:2px}
+`;
+  // Store the extra style inside the panel so the existing close/reopen cleanup owns it.
+  ui.append(css);
+  title.textContent='EasyPoint';title.style.cssText='font-weight:700;letter-spacing:-.2px';
+  badge.style.display='none';
+  hdr.style.cssText='cursor:move;user-select:none;display:flex;align-items:center;gap:8px;padding:10px 14px;background:#161b24;border-radius:12px 12px 0 0;border-bottom:1px solid #303644;position:sticky;top:0;z-index:2';
+  hdr.replaceChildren(title,flex,btnMin,btnX);
+  body.style.cssText='padding:14px;display:flex;flex-direction:column;gap:12px;align-items:stretch';
+  const hidden=(el,value)=>{if(value)el.setAttribute('hidden','');else el.removeAttribute('hidden');};
+  const make=(tag,text,className)=>{const el=d.createElement(tag);if(text)el.textContent=text;if(className)el.className=className;return el;};
+  const taskSwitch=make('div','','ep-mode');taskSwitch.setAttribute('role','group');taskSwitch.setAttribute('aria-label','Hva vil du gjøre?');
+  const fillMode=make('button','Scripts og bilder');fillMode.type='button';fillMode.setAttribute('aria-controls','ep-fill-card');
+  const emptyMode=make('button','Tomme materiellplasser');emptyMode.type='button';emptyMode.setAttribute('aria-controls','ep-empty-card');
+  taskSwitch.append(fillMode,emptyMode);
+
+  const scanCard=make('section','','ep-card');
+  const scanRow=make('div','','ep-row');
+  const scanHeading=make('h2','1. Hent annonser','ep-heading');scanHeading.style.flex='1';
+  btnScan.textContent='Hent fra Adpoint';btnScan.style.cssText='cursor:pointer;border:1px solid #44516a;border-radius:7px;padding:7px 11px;background:#253348;color:#e8f1ff;font-weight:600';
+  scanRow.append(scanHeading,btnScan);
+  const scanHelp=make('p','Henter annonselinjene fra kampanjen du har åpen.','ep-help');
+  const selectionDetails=make('details');
+  const selectionSummary=make('summary','Velg annonselinjer');selectionSummary.setAttribute('aria-live','polite');
+  selectionDetails.append(selectionSummary,listWrap);
+  listWrap.style.cssText='width:100%';list.style.maxHeight='150px';
+  btnAll.textContent='Alle';btnNone.textContent='Ingen';hidden(btnInv,true);
+  scanCard.append(scanRow,scanHelp,selectionDetails);
+
+  const fillCard=make('section','','ep-card');fillCard.id='ep-fill-card';
+  const importHeading=make('h2','2. Velg scripts eller bilder','ep-heading');
+  const importHelp=make('p','Importer filen med scripts, lim inn fra Excel eller velg bildefiler.','ep-help');
+  const importButtons=make('div','','ep-row');btnCSV.textContent='Velg fil';btnPaste.textContent='Lim inn fra Excel';importButtons.append(btnCSV,btnPaste,file);
+  drop.textContent='Du kan også slippe CSV, JSON eller bilder her';drop.style.cssText='border:1px dashed #455169;border-radius:7px;padding:13px;text-align:center;color:#a9b3c4;font-size:12px';
+  const importedRow=make('div','','ep-row');mapChip.className='';mapChip.style.cssText='flex:1;font-size:12px;color:#b4dec7';
+  mapClear.textContent='Tøm import';mapClear.title='Fjern importerte scripts og bilder';mapClear.style.cssText='cursor:pointer;border:0;background:transparent;color:#a9b3c4;padding:3px;font-size:12px';
+  importedRow.append(mapChip,mapClear);
+  fillCard.append(importHeading,importHelp,importButtons,drop,importedRow);
+
+  bulk.id='ep-empty-card';bulk.className='ep-card';bulk.style.cssText='';
+  bulkLabel.textContent='2. Velg størrelse og antall';bulkLabel.className='ep-heading';bulkLabel.style.fontSize='14px';
+  bulkNote.textContent='Antallet er per valgt linje. Størrelsen må være tilgjengelig i Adpoint.';bulkNote.className='ep-help';bulkNote.style.cssText='';
+  bulkPlus.textContent='+ Legg til en størrelse';bulkPlus.style.alignSelf='flex-start';
+  bulk.replaceChildren(bulkLabel,bulkNote,bulkRows,bulkPlus);
+
+  const options=make('details','','ep-options');
+  const optionsSummary=make('summary','Flere valg');
+  const optionsBody=make('div');
+  const explain=(wrap,text,hint)=>{
+    const input=wrap.querySelector('input');const content=make('span',text);content.append(make('small',hint));wrap.replaceChildren(input,content);return content;
+  };
+  const reuseContent=explain(reuseWrap,'Gjenta scripts og bilder ved behov','Bruker importen flere ganger hvis det er flere plasser enn filer.');
+  explain(addWrap,'Opprett manglende materiellplasser','Legger til plasser hvis importen har flere versjoner enn det er plass til.');
+  explain(owWrap,'Erstatt eksisterende materiell','Tillater at scripts og bilder som allerede ligger inne blir byttet ut.');
+  optionsBody.append(addWrap,owWrap,reuseWrap);options.append(optionsSummary,optionsBody);
+
+  const action=make('div','','ep-action');
+  const policy=make('div','','ep-policy');
+  const status=make('div','Start med å hente annonsene fra Adpoint.','ep-status');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+  action.append(policy,btnRun,btnBulk,btnStop,status);
+  btnBulk.style.cssText=btnRun.style.cssText;
+  btnStop.style.cssText='cursor:pointer;border:1px solid #a84d52;border-radius:8px;padding:8px 12px;background:#4c222a;color:#ffe4e8;font-weight:600';
+  const diagnostics=make('details');const diagnosticsSummary=make('summary','Vis detaljer');
+  info.style.cssText='display:block;font-size:11px;color:#9ba8ba;padding:0 0 7px';
+  log.style.cssText='max-height:180px;overflow:auto;background:#0b0e14;border:1px solid #303644;border-radius:7px;padding:9px;font:11px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere';
+  diagnostics.append(diagnosticsSummary,info,log);
+  body.replaceChildren(taskSwitch,scanCard,fillCard,bulk,options,action,diagnostics);
+  let mode='fill';
+  refreshSimpleUI=()=>{
+    const ids=selectedIds(),count=ids.length;
+    let images=0;imagePool.forEach(items=>images+=items.length);
+    const imports=mapping.length+images;
+    fillMode.setAttribute('aria-pressed',String(mode==='fill'));emptyMode.setAttribute('aria-pressed',String(mode==='empty'));
+    fillMode.disabled=app.busy;emptyMode.disabled=app.busy;
+    hidden(fillCard,mode!=='fill');hidden(bulk,mode!=='empty');hidden(options,mode!=='fill');
+    hidden(btnRun,mode!=='fill');hidden(btnBulk,mode!=='empty');hidden(btnStop,!app.busy);
+    hidden(selectionDetails,!scanned.length);hidden(importedRow,!imports);
+    hidden(policy,mode!=='fill'||!imports);
+    btnScan.textContent=scanned.length?'Hent på nytt':'Hent fra Adpoint';
+    scanHelp.textContent=scanned.length?`${scanned.length} annonselinjer hentet fra Adpoint.`:'Henter annonselinjene fra kampanjen du har åpen.';
+    selectionSummary.textContent=count===scanned.length?`Alle ${count} linjer er valgt · endre utvalg`:`${count} av ${scanned.length} linjer er valgt · endre utvalg`;
+    mapChip.className='';mapChip.textContent=[mapping.length?`${mapping.length} scripts`:null,images?`${images} bilder`:null].filter(Boolean).join(' og ')+' klare';
+    btnRun.textContent=count?`Legg inn på ${count} ${count===1?'linje':'linjer'}`:'Legg inn materiell';
+    btnBulk.textContent=count?`Opprett plasser på ${count} ${count===1?'linje':'linjer'}`:'Opprett materiellplasser';
+    btnRun.disabled=app.busy||!count||!imports;btnBulk.disabled=app.busy||!count||!availableBulkOptions().length;
+    bulkPlus.disabled=app.busy||!scanned.length;
+    policy.textContent=overwriteMode==='all'?'Erstatter eksisterende materiell.':'Bevarer eksisterende materiell.';
+    if(addExtraSizes)policy.textContent+=' Oppretter manglende plasser.';
+    policy.setAttribute('data-replace',String(overwriteMode==='all'));
+    reuseContent.style.opacity=addExtraSizes?'.55':'1';
+    if(app.lastError){status.textContent=app.lastError;status.style.color='#ffb7b7';diagnostics.open=true;}
+    else if(app.busy){
+      const progress=app.lastStats;
+      status.textContent=stopping?'Stopper etter pågående steg…':(app.jobLabel||'Arbeider…')+(progress?.saved?' · '+progress.saved+' lagret':progress?.added?' · '+progress.added+' plasser opprettet':'');status.style.color='#a9cff3';
+    }
+    else if(app.lastStats&&((app.lastStats.saved||0)+(app.lastStats.added||0)+(app.lastStats.err||0)+(app.lastStats.uncertain||0)>0)){
+      const result=app.lastStats;status.textContent=[result.saved?`${result.saved} materiell lagret`:null,result.added?`${result.added} nye plasser`:null,result.err?`${result.err} feil`:null,result.uncertain?`${result.uncertain} usikre endringer`:null].filter(Boolean).join(' · ');status.style.color='#b4dec7';
+    }else{
+      status.style.color='#a9b3c4';status.textContent=!scanned.length?'Start med å hente annonsene fra Adpoint.':!count?'Velg minst én annonselinje.':mode==='empty'?'Velg størrelse og antall nye plasser.':!imports?'Velg fil eller lim inn scripts for å fortsette.':'Klar til å legge inn materiell.';
+    }
+  };
+  fillMode.onclick=()=>{if(app.busy)return;mode='fill';refreshSimpleUI();};
+  emptyMode.onclick=()=>{if(app.busy)return;mode='empty';refreshSimpleUI();};
+  app.runSelected=()=>{if(mode==='empty')btnBulk.click();else btnRun.click();};
+  for(const control of [reuseCb,addCb,owCb]){
+    const previousChange=control.onchange;
+    control.onchange=event=>{previousChange?.(event);refreshSimpleUI();};
+  }
+  listen(options,'toggle',()=>adjustHeights(ui.getBoundingClientRect().height));
+  listen(diagnostics,'toggle',()=>adjustHeights(ui.getBoundingClientRect().height));
+  refreshSimpleUI();
+})();
+
+
 /* ========= campaign view helpers ========= */
 function inCampaignTableView(){ return !!d.querySelector('tr.set-matSpecDataRow'); }
 function findBackToCampaignButton(){
@@ -1548,7 +1682,7 @@ _bestiltInt=setInterval(()=>{
   const m=t.match(/Bestilt(?:\s*\(BxH\))?\s*[:\-]?\s*(\d{2,4})\s*[x×]\s*(\d{2,4})/i);
   badge.textContent=m?`— ${m[1]}x${m[2]}`:'';
 },900);
-listen(w,'keydown',e=>{ if(e.altKey && e.key.toLowerCase()==='a'){ if(e.target?.closest('input,textarea,[contenteditable="true"],.CodeMirror')) return; e.preventDefault(); btnRun.click(); }});
+listen(w,'keydown',e=>{ if(e.altKey && e.key.toLowerCase()==='a'){ if(e.target?.closest('input,textarea,[contenteditable="true"],.CodeMirror')) return; e.preventDefault(); if(app.runSelected)app.runSelected();else btnRun.click(); }});
 
 /* restore minimized state */
 (function restoreMinState(){
