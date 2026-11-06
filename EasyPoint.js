@@ -1,6 +1,6 @@
 javascript:(()=>{try{
 /* ============================================================
-   EasyPoint 2.1 / Adpoint — kontrollert kø og massetillegging
+   EasyPoint 2.2 / Adpoint — kontrollert kø og massetillegging
    - Norsk/engelsk Adpoint, linje- og placeholder-ID ved hvert steg
    - Én jobb om gangen; stopp/lukk venter på pågående lagring
    - Legg til antall materiellplasser uten CSV; auto-opprett ved import
@@ -60,11 +60,32 @@ function versionKey(str){
   return null;
 }
 function extractLineIds(str){
-  const ids=new Set();
-  const re=/L[\s\u00A0_-]*?(\d{6,10})(?!\d)/gi;
-  const s=String(str||''); let m;
-  while((m=re.exec(s))!==null) ids.add(m[1]);
+  // L must be its own name token: never the last character of XL/XXL.
+  const ids=new Set(),re=/(?:^|[\s_.,;()[\]{}-])L[\s\u00A0_-]*(\d{6,10})(?![0-9A-Za-z])/gi;
+  let match;while((match=re.exec(String(str||'')))!==null)ids.add(match[1]);
   return [...ids];
+}
+function isLineIdField(name){return /^(?:lineitem(?:id)?|lineids?|linjeid(?:er)?|linjenummer)$/.test(String(name).toLowerCase().replace(/[\s_.-]/g,''));}
+function explicitLineIds(value){
+  const ids=new Set();
+  for(const entry of (Array.isArray(value)?value:[value]).flat()){
+    for(const part of String(entry??'').split(/[,;|\n]+/).map(x=>x.trim()).filter(Boolean)){
+      const match=part.match(/^(?:L[\s_-]*)?(\d{6,10})$/i);
+      if(!match)throw new Error(`Ugyldig linje-ID '${part}'. Bruk 6–10 sifre i Line item/lineIds-feltet.`);
+      ids.add(match[1]);
+    }
+  }
+  return [...ids];
+}
+function mappingIds(name,metadata){
+  const fields=Object.entries(metadata||{}).filter(([key])=>isLineIdField(key));
+  const explicit=[...new Set(fields.flatMap(([,value])=>explicitLineIds(value)))];
+  return explicit.length?{lineIds:explicit,lineIdsSource:'field',mappingSchema:3}
+    :{lineIds:extractLineIds(name),lineIdsSource:'name',mappingSchema:3};
+}
+function repairStoredMapping(items){
+  // Older parsers scanned script comments and URLs for IDs. Rebuild only those legacy IDs.
+  return items.map(item=>item.mappingSchema===3?item:{...item,...mappingIds(item.name,{})});
 }
 
 // Line readiness is checked before each operation.
@@ -218,6 +239,8 @@ async function ensureAllTilesMounted(root=d){
 /* ========= info panel switching ========= */
 // Panel matching uses the exact placeholder ID, including repeated sizes.
 
+let verifiedSelection=null;
+let boundEditor=null;
 function labelledId(root,label){
   if(!root) return null;
   for(const el of root.querySelectorAll('span,div,label,dt')){
@@ -231,28 +254,63 @@ function labelledId(root,label){
   }
   return null;
 }
+const PLACEHOLDER_LABEL=/^(?:placeholder(?:\s*id)?|plassholder(?:[- ]?id)?|materiellplass[- ]?id)$/i;
+const LINE_LABEL=/^(?:line\s*item|linje[- ]?(?:id|nummer))$/i;
 function placeholderId(tile){
   const input=tile?.querySelector('input[type="file"][id^="dropzone-"]');
   const id=input?.id.match(/-(\d+)$/)?.[1];
-  return id||labelledId(tile,/^(?:placeholder\s*id|plassholder[- ]?id|materiellplass[- ]?id)$/i);
+  return id||labelledId(tile,PLACEHOLDER_LABEL);
 }
 function panelIdentity(){
   const panel=d.querySelector('#InfoPanelContainer');
-  return {
-    placeholder:labelledId(panel,/^(?:placeholder\s*id|plassholder[- ]?id|materiellplass[- ]?id)$/i),
-    line:labelledId(panel,/^(?:line\s*item|linje[- ]?(?:id|nummer))$/i)
-  };
+  return {placeholder:labelledId(panel,PLACEHOLDER_LABEL),line:labelledId(panel,LINE_LABEL)};
+}
+function summaryTab(){
+  return [...d.querySelectorAll('#InfoPanelContainer [role="tab"]')]
+    .find(tab=>/CUSTOMER_SUMMARY$/i.test(tab.id)||/^(summary|sammendrag|oversikt)$/i.test(tab.textContent.trim()))||null;
+}
+function selectedRecordMatches(record){
+  const tiles=[...d.querySelectorAll('.set-creativeTile__selected,.set-creativeTile[aria-selected="true"]')].filter(vis);
+  if(tiles.length!==1||placeholderId(tiles[0])!==record.placeholder) return false;
+  const row=dataRowForTile(tiles[0]);
+  return !!row&&rowId(row)===record.line;
 }
 async function ensurePanelSwitchedToTile(tile,timeout=6000){
-  const expected=placeholderId(tile);
-  if(!expected||!tile?.isConnected) return false;
+  verifiedSelection=null;boundEditor=null;
+  const expected=placeholderId(tile),row=dataRowForTile(tile),line=row&&rowId(row);
+  if(!expected||!line||line==='?'||!tile?.isConnected) return false;
+  if(!await waitFor(()=>selectedRecordMatches({placeholder:expected,line}),timeout,90))return false;
+  // Adpoint unmounts Summary while the tag tab is open. Read its IDs before opening the editor.
+  const summary=summaryTab();if(!summary)return false;
+  summary.click();
   const ok=await waitFor(()=>{
     const identity=panelIdentity();
-    return tile.isConnected&&isTileSelected(tile)&&identity.placeholder===expected;
+    return selectedRecordMatches({placeholder:expected,line})&&identity.placeholder===expected&&identity.line===line;
   },timeout,90);
   if(!ok) return false;
   await waitForIdle(12000);
-  return panelIdentity().placeholder===expected;
+  const identity=panelIdentity();
+  if(identity.placeholder!==expected||identity.line!==line||!selectedRecordMatches({placeholder:expected,line}))return false;
+  verifiedSelection={placeholder:expected,line,container:d.querySelector('#InfoPanelContainer')};
+  return true;
+}
+function bindEditor(editor){
+  if(!editor||!verifiedSelection)return editor;
+  if(verifiedSelection.container!==d.querySelector('#InfoPanelContainer')||!selectedRecordMatches(verifiedSelection))return null;
+  boundEditor={...verifiedSelection,panel:editor.panel,el:editor.el};
+  return editor;
+}
+function assertTarget(record){
+  if(!selectedRecordMatches(record))throw new Error('Riktig materiellplass og annonselinje er ikke entydig valgt.');
+  const identity=panelIdentity();
+  if(identity.placeholder){
+    if(identity.placeholder!==record.placeholder||identity.line!==record.line)throw new Error(`Valgt materiell samsvarer ikke med linje ${record.line}, placeholder ${record.placeholder}.`);
+    return;
+  }
+  const bound=boundEditor;
+  if(!bound||bound.placeholder!==record.placeholder||bound.line!==record.line||bound.container!==d.querySelector('#InfoPanelContainer')||!bound.container.isConnected||!bound.el.isConnected||bound.panel!==getThirdPartyPanel()||!vis(bound.panel)){
+    throw new Error(`Editoren er ikke bekreftet for linje ${record.line}, placeholder ${record.placeholder}. Ingen videre skriving.`);
+  }
 }
 
 
@@ -274,9 +332,9 @@ async function get3PEditorStrict(){
     const panel=getThirdPartyPanel();
     if(!panel||!vis(panel)) return null;
     const cm=[...panel.querySelectorAll('.third-party .CodeMirror')].find(vis);
-    if(cm?.CodeMirror) return {kind:'cm',el:cm,panel,cm:cm.CodeMirror};
-    const ta=[...panel.querySelectorAll('.third-party textarea')].find(vis);
-    return ta?{kind:'ta',el:ta,panel}:null;
+    if(cm?.CodeMirror) return bindEditor({kind:'cm',el:cm,panel,cm:cm.CodeMirror});
+    const ta=[...panel.querySelectorAll('.third-party textarea')].find(el=>vis(el)&&!el.closest('.CodeMirror'));
+    return ta?bindEditor({kind:'ta',el:ta,panel}):null;
   },6000,90);
 }
 
@@ -458,17 +516,14 @@ function rowsToMap(rows){
     const name=rawName || '';
     const vkey=versionKey(rawName);
 
-    let lineIds=extractLineIds(rawName);
-    if(!lineIds.length){
-      const rowText=cells.map(c=>String(c||'')).join(' _ ');
-      lineIds=extractLineIds(rowText);
-    }
+    const lineMetadata=Object.fromEntries(head.map((key,index)=>[key,cells[index]||'']).filter(([key])=>isLineIdField(key)));
+    const ids=mappingIds(rawName,lineMetadata);
 
     if(svSize.size && svName.size && cs(svSize.size)!==cs(svName.size) && !warned){
       LOG('! CSV-advarsel: "Size" er ulik "Creative Name" — jeg stoler på Size-kolonnen.');
       warned=true;
     }
-    if(size && tag) out.push({size,variant,tag,name,vkey,lineIds});
+    if(size && tag) out.push({size,variant,tag,name,vkey,...ids});
   }
   return out;
 }
@@ -483,17 +538,13 @@ function normalizeJSON(arr){
     const tag=String(o.tag||o.Tag||o['Secure Content']||o['secure content']||o.Script||o.script||'').trim();
     const vkey=versionKey(rawName);
 
-    let lineIds=extractLineIds(rawName);
-    if(!lineIds.length){
-      const flat=Object.values(o||{}).map(v=>String(v||'')).join(' _ ');
-      lineIds=extractLineIds(flat);
-    }
+    const ids=mappingIds(rawName,o);
 
     if(svSize.size && svName.size && cs(svSize.size)!==cs(svName.size) && !warned){
       LOG('! JSON-advarsel: "Size" er ulik "name" — jeg stoler på Size-feltet.');
       warned=true;
     }
-    if(size && tag) out.push({size,variant,tag,name:rawName,vkey,lineIds});
+    if(size && tag) out.push({size,variant,tag,name:rawName,vkey,...ids});
   });
   return out;
 }
@@ -1021,6 +1072,7 @@ adjustHeights(ui.getBoundingClientRect().height);
 /* ========= mapping state ========= */
 const MAP_KEY='ap3p_map_v2';
 let mapping=G(MAP_KEY,[]); if(!Array.isArray(mapping)) mapping=[];
+mapping=repairStoredMapping(mapping);S(MAP_KEY,mapping);
 function renderMapChip(){
   const csvCount=mapping.length;
   let imgCount=0; imagePool.forEach(a=>imgCount+=a.length);
@@ -1239,7 +1291,7 @@ function setBusy(value){
 }
 async function withJob(label,fn){
   if(app.busy)return;
-  stopping=false;app.jobLabel=label;app.lastError='';app.lastStats=null;setBusy(true);showToast(label);
+  stopping=false;app.jobLabel=label;app.lastError='';app.lastNotice='';app.lastStats=null;setBusy(true);showToast(label);
   try{await fn();}
   catch(error){app.lastError=error?.message||String(error);LOG('! '+app.lastError);showToast('Jobben er stoppet',app.lastError);}
   finally{setBusy(false);if(app.closing)app.destroy();}
@@ -1270,12 +1322,6 @@ async function recordsForLine(id){
   return records;
 }
 async function getFreshRecord(line,placeholder){return (await recordsForLine(line)).find(x=>x.placeholder===placeholder)||null;}
-function assertTarget(record){
-  const identity=panelIdentity();
-  if(identity.placeholder!==record.placeholder || (identity.line&&identity.line!==record.line))throw new Error(`Valgt materiell samsvarer ikke med linje ${record.line}, placeholder ${record.placeholder}. Ingen videre skriving.`);
-  const selectedTiles=[...d.querySelectorAll('.set-creativeTile__selected,.set-creativeTile[aria-selected="true"]')].filter(vis);
-  if(selectedTiles.length!==1||placeholderId(selectedTiles[0])!==record.placeholder)throw new Error('Riktig materiellplass er ikke entydig valgt.');
-}
 async function editorForRecord(record){
   const fresh=await getFreshRecord(record.line,record.placeholder);
   if(!fresh||!await selectTile(fresh.tile)||!await ensurePanelSwitchedToTile(fresh.tile))throw new Error(`Kunne ikke bekrefte valgt materiellplass ${record.placeholder}.`);
@@ -1335,6 +1381,7 @@ function renderPreview(byId){
   for(const [id,records]of byId){
     LOG(`→ Linje ${id}: ${prettyCounts(records)||'ingen plasser'}`);
     const groups=workGroups(id,records,mapping,imagePool);
+    if(!groups.length)LOG('   ! Ingen scripts/bilder matcher denne linjen. Kontroller størrelser og eventuelle linje-ID-er i importen.');
     for(const group of groups){
       LOG(`   ${group.size}${group.variant?'/'+group.variant:''}${group.side?'/'+group.side:''}: ${group.assets.length} ${group.kind==='image'?'bilder':'scripts'}, ${group.records.length} plasser.`);
     }
@@ -1431,11 +1478,10 @@ btnRun.onclick=()=>withJob('Legger inn materiell…',async()=>{
       const records=await recordsForLine(id);
       const groups=workGroups(id,records,map,images);
       const allowed=settings.add?await getAllowedAddSizesForLine(id):[];
-      if(!groups.length){stats.skip++;stats.done++;setInfo(stats);continue;}
+      if(!groups.length){LOG(`! Linje ${id}: ingen scripts/bilder matcher linjen. Kontroller importens størrelser og linje-ID-er.`);stats.skip++;stats.done++;setInfo(stats);continue;}
       for(const group of groups){
         requireRunning();
         if(!group.records.length&&(!settings.add||!optionForGroup(allowed,group))){
-          stats.skip+=group.assets.length;
           LOG(`• Linje ${id}: hopper over ${group.size}${group.variant?'/'+group.variant:''}; ingen passende plass eller tilgjengelig størrelsesvalg.`);
           continue;
         }
@@ -1489,8 +1535,9 @@ btnRun.onclick=()=>withJob('Legger inn materiell…',async()=>{
       }
       stats.done++;setInfo(stats);
     }
+    if(!stats.saved&&!stats.matched){app.lastNotice='Ingen materiell ble lagt inn. Se detaljer for linjer uten match eller ledige plasser.';LOG('! '+app.lastNotice);}
     LOG(`Ferdig. Bekreftet lagret/opplastet: ${stats.saved}. Allerede på plass: ${stats.matched}. Nye plasser: ${stats.added}. Hoppet over: ${stats.skip}.`);
-    showToast('Autofyll ferdig',`Lagret: ${stats.saved} · Allerede på plass: ${stats.matched} · Nye: ${stats.added}`);
+    showToast(app.lastNotice?'Ingen materiell ble lagt inn':'Autofyll ferdig',`Lagret: ${stats.saved} · Allerede på plass: ${stats.matched} · Nye: ${stats.added}`);
   }catch(error){if(error.uncertain)stats.uncertain=(stats.uncertain||0)+1;else if(!stopping)stats.err++;throw error;}
   finally{setInfo(stats);await refreshAfterMutation(ids);}
 });
@@ -1619,6 +1666,7 @@ refreshList();btnBulk.disabled=true;
     policy.setAttribute('data-replace',String(overwriteMode==='all'));
     reuseContent.style.opacity=addExtraSizes?'.55':'1';
     if(app.lastError){status.textContent=app.lastError;status.style.color='#ffb7b7';diagnostics.open=true;}
+    else if(app.lastNotice&&!app.busy){status.textContent=app.lastNotice;status.style.color='#ffd291';}
     else if(app.busy){
       const progress=app.lastStats;
       status.textContent=stopping?'Stopper etter pågående steg…':(app.jobLabel||'Arbeider…')+(progress?.saved?' · '+progress.saved+' lagret':progress?.added?' · '+progress.added+' plasser opprettet':'');status.style.color='#a9cff3';
