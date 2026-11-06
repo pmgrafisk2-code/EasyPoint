@@ -1,10 +1,11 @@
 javascript:(()=>{try{
 /* ============================================================
-   EasyPoint 2.2 / Adpoint — kontrollert kø og massetillegging
+   EasyPoint 2.3 / Adpoint — kontrollert kø og massetillegging
    - Norsk/engelsk Adpoint, linje- og placeholder-ID ved hvert steg
    - Én jobb om gangen; stopp/lukk venter på pågående lagring
    - Legg til antall materiellplasser uten CSV; auto-opprett ved import
-   - Bekreft lagring, bevar eksisterende materiell, ingen blinde gjentakelser
+   - Rask innsending etter tur; Adpoint prosesserer parallelt i bakgrunnen
+   - Samlet etterkontroll, bevar eksisterende materiell, ingen blinde gjentakelser
    ============================================================ */
 
 const d=document,w=window;
@@ -412,28 +413,13 @@ async function saveWithRetry(editor,record,expected){
     if(error) throw new Error('Adpoint avviste lagringen: '+error.textContent.trim().slice(0,200));
     const notice=successNotice();
     if(notice&&(notice!==oldNotice||notice.textContent!==oldText)) return true;
-    // Adpoint typically disables or removes the action after accepting the tag.
+    // This UI change acknowledges submission only. Persistence is checked at the end.
     return !ready.isConnected||isDisabled(ready);
   },15000,100);
   if(!acknowledged) throw new UncertainMutationError('Lagringen er usikker: ingen kvittering fra Adpoint. Kontroller materiellplassen før ny kjøring.');
-  try{await waitForIdle(15000);}catch(error){throw new UncertainMutationError(error.message+' Lagringen må kontrolleres i Adpoint.');}
-  assertTarget(record);
-  // Remount the editor by leaving and returning to its tab, then read back.
-  const summary=[...d.querySelectorAll('#InfoPanelContainer [role="tab"]')]
-    .find(tab=>/SUMMARY$/i.test(tab.id)||/^(summary|sammendrag|oversikt)$/i.test(tab.textContent.trim()));
-  if(!summary) throw new UncertainMutationError('Lagre ble utført, men kunne ikke åpne sammendrag for etterkontroll. Kontroller Adpoint.');
-  summary.click();
-  if(!await waitFor(()=>!getThirdPartyPanel()||!vis(getThirdPartyPanel()),4000,90)) throw new UncertainMutationError('Kunne ikke forlate editor for etterkontroll.');
-  const readBack=await get3PEditorStrict();
-  if(!readBack) throw new UncertainMutationError('Kunne ikke åpne editor igjen etter lagring.');
-  assertTarget(record);
-  const value=await getEditorValueStable(readBack);
-  if(normalizeTagForCompare(value)!==normalizeTagForCompare(expected)) throw new Error('Etterkontrollen fant et annet script enn det som ble lagret.');
-  const stillDirty=saveButtons(readBack.panel).filter(btn=>!isDisabled(btn)&&/^(lagre(?: endringer)?|save(?: changes)?|oppdater|update)$/i.test(btn.textContent.trim()));
-  if(stillDirty.length&&!successNotice()) throw new UncertainMutationError('Adpoint viser fortsatt ulagrede endringer etter lagring. Kontroller før ny kjøring.');
-  return true;
+  try{await waitForIdle(15000);}catch(error){throw new UncertainMutationError(error.message+' Innsendingen må kontrolleres i Adpoint.');}
+  return {submitted:true};
 }
-
 
 /* ========= empty editor detection ========= */
 function normalizeEditorText(s){
@@ -784,7 +770,7 @@ function materialSignature(tile){
     .map(el=>el.currentSrc||el.src||getComputedStyle(el).backgroundImage||'').join('|');
   return media;
 }
-async function uploadImageToTile(record,file){
+async function uploadImageToTile(record,file,mayReplace=true){
   const current=await getFreshRecord(record.line,record.placeholder);
   if(!current) throw new Error('Materiellplassen for bildet finnes ikke lenger.');
   if(!await selectTile(current.tile)||!await ensurePanelSwitchedToTile(current.tile)) throw new Error('Kunne ikke velge riktig materiellplass for bildet.');
@@ -795,19 +781,10 @@ async function uploadImageToTile(record,file){
   const dt=new DataTransfer(); dt.items.add(file); inp.files=dt.files;
   // Dropzone handles change; dispatching both input and change can start two uploads.
   inp.dispatchEvent(new Event('change',{bubbles:true}));
-  await confirmReplaceIfPrompted(1800);
+  if(mayReplace)await confirmReplaceIfPrompted(1800);
   try{await waitForIdle(20000);}catch(error){throw new UncertainMutationError(error.message+' Bildeopplastingen må kontrolleres i Adpoint.');}
-  const start=Date.now();
-  while(Date.now()-start<20000){
-    const error=visibleAdpointError();
-    if(error) throw new Error('Bildeopplasting feilet: '+error.textContent.trim().slice(0,200));
-    const now=await getFreshRecord(record.line,record.placeholder);
-    if(now&&tileHasMaterial(now.tile)&&materialSignature(now.tile)!==before) return true;
-    await sleep(180);
-  }
-  throw new UncertainMutationError('Bildeopplastingen er usikker: ny forhåndsvisning ble ikke bekreftet. Kontroller Adpoint.');
+  return {submitted:true,beforeSignature:before};
 }
-
 
 /* ========= UI ========= */
 (function injectCSS(){
@@ -904,7 +881,7 @@ const log=d.createElement('div'); log.style.cssText='height:200px;overflow:auto;
 ui.append(hdr,body,listWrap,log); d.body.appendChild(ui);
 
 const LOG=m=>{log.textContent+=m+'\n'; log.scrollTop=log.scrollHeight;};
-const setInfo=o=>{app.lastStats={...o};info.textContent=`Linjer:${o.items}  Ferdig:${o.done}  Lagret:${o.saved||0}  Nye:${o.added||0}  Hoppet:${o.skip||0}  Feil:${o.err||0}  Usikkert:${o.uncertain||0}`;refreshSimpleUI();};
+const setInfo=o=>{app.lastStats={...o};info.textContent=`Linjer:${o.items}  Ferdig:${o.done}  Lagret:${o.saved||0}  Nye:${o.added||0}  Hoppet:${o.skip||0}  Feil:${o.err||0}  Usikkert:${o.uncertain||0}  Sendt:${o.submitted||0}`;refreshSimpleUI();};
 body.append(info,btnCSV,btnPaste,file,drop);
 
 /* ===== Apply saved UI state ===== */
@@ -1291,7 +1268,7 @@ function setBusy(value){
 }
 async function withJob(label,fn){
   if(app.busy)return;
-  stopping=false;app.jobLabel=label;app.lastError='';app.lastNotice='';app.lastStats=null;setBusy(true);showToast(label);
+  stopping=false;app.jobLabel=label;app.lastError='';app.lastNotice='';app.phase='';app.lastStats=null;setBusy(true);showToast(label);
   try{await fn();}
   catch(error){app.lastError=error?.message||String(error);LOG('! '+app.lastError);showToast('Jobben er stoppet',app.lastError);}
   finally{setBusy(false);if(app.closing)app.destroy();}
@@ -1334,7 +1311,7 @@ async function inspectRecord(record){
   const value=await getEditorValueStable(editor);
   assertTarget(record);
   const fresh=await getFreshRecord(record.line,record.placeholder);
-  return {record:fresh,value,occupied:!isEmpty3PValue(value)||tileHasMaterial(fresh.tile)};
+  return {record:fresh,editor,value,occupied:!isEmpty3PValue(value)||tileHasMaterial(fresh.tile)};
 }
 function sameTag(a,b){return normalizeTagForCompare(a)===normalizeTagForCompare(b);}
 function takeExistingMatches(assets,states,kind){
@@ -1471,7 +1448,8 @@ btnRun.onclick=()=>withJob('Legger inn materiell…',async()=>{
   const map=mapping.map(x=>({...x,lineIds:[...(x.lineIds||[])]}));
   const images=new Map([...imagePool].map(([key,files])=>[key,files.slice()]));
   const settings={overwrite:overwriteMode,add:addExtraSizes,reuse:reuseAssets};
-  const stats={items:ids.length,done:0,saved:0,added:0,skip:0,err:0,matched:0};setInfo(stats);
+  const stats={items:ids.length,done:0,saved:0,submitted:0,pending:0,added:0,skip:0,err:0,matched:0};setInfo(stats);
+  const submittedWrites=[];let runError=null;
   try{
     for(const id of ids){
       requireRunning();await waitForIdle();
@@ -1517,16 +1495,18 @@ btnRun.onclick=()=>withJob('Legger inn materiell…',async()=>{
           if(settings.overwrite==='empty'&&check.occupied)throw new Error('En planlagt tom plass er blitt fylt. Jobben stoppet før overskriving.');
           if(!sameTag(check.value,state.value))throw new Error('Materiellinnholdet endret seg under kjøringen. Kontroller Adpoint.');
           if(group.kind==='image'){
-            await uploadImageToTile(check.record,asset);
+            const receipt=await uploadImageToTile(check.record,asset,check.occupied);
+            submittedWrites.push({kind:'image',record:check.record,beforeSignature:receipt.beforeSignature});
           }else{
-            const editor=await editorForRecord(check.record);
+            const editor=check.editor||await editorForRecord(check.record);
             assertTarget(check.record);
             if(!await pasteWithVerify(editor,asset.tag,1))throw new Error('Scriptet festet seg ikke i editoren.');
             assertTarget(check.record);
             await saveWithRetry(editor,check.record,asset.tag);
+            submittedWrites.push({kind:'script',record:check.record,expected:asset.tag});
           }
-          placed++;stats.saved++;setInfo(stats);
-          LOG(`✓ Linje ${id}, ${group.size}, placeholder ${state.record.placeholder}: ${group.kind==='image'?fileName(asset):tagLabel(asset)} — bekreftet.`);
+          placed++;stats.submitted++;stats.pending=submittedWrites.length;setInfo(stats);
+          LOG(`✓ Linje ${id}, ${group.size}, placeholder ${state.record.placeholder}: ${group.kind==='image'?fileName(asset):tagLabel(asset)} — sendt til Adpoint.`);
         }
         if(!settings.reuse&&placed<remaining.length){
           stats.skip+=remaining.length-placed;
@@ -1535,13 +1515,65 @@ btnRun.onclick=()=>withJob('Legger inn materiell…',async()=>{
       }
       stats.done++;setInfo(stats);
     }
-    if(!stats.saved&&!stats.matched){app.lastNotice='Ingen materiell ble lagt inn. Se detaljer for linjer uten match eller ledige plasser.';LOG('! '+app.lastNotice);}
-    LOG(`Ferdig. Bekreftet lagret/opplastet: ${stats.saved}. Allerede på plass: ${stats.matched}. Nye plasser: ${stats.added}. Hoppet over: ${stats.skip}.`);
-    showToast(app.lastNotice?'Ingen materiell ble lagt inn':'Autofyll ferdig',`Lagret: ${stats.saved} · Allerede på plass: ${stats.matched} · Nye: ${stats.added}`);
-  }catch(error){if(error.uncertain)stats.uncertain=(stats.uncertain||0)+1;else if(!stopping)stats.err++;throw error;}
-  finally{setInfo(stats);await refreshAfterMutation(ids);}
+  }catch(error){
+    runError=error;
+    if(error.uncertain)stats.uncertain=(stats.uncertain||0)+1;else if(!stopping)stats.err++;
+  }finally{
+    // Already submitted writes are read back even when a later write fails.
+    // Stop/close cancels this read-only pass and reports the remaining items as unverified.
+    await verifySubmittedWrites(submittedWrites,stats);
+    setInfo(stats);await refreshAfterMutation(ids);
+  }
+  if(!stats.submitted&&!stats.matched&&!runError){app.lastNotice='Ingen materiell ble lagt inn. Se detaljer for linjer uten match eller ledige plasser.';LOG('! '+app.lastNotice);}
+  if(stats.uncertain&&!app.lastNotice)app.lastNotice=`${stats.uncertain} endringer er usikre. Kontroller disse i Adpoint.`;
+  LOG(`Resultat. Sendt: ${stats.submitted}. Kontrollert lagret/opplastet: ${stats.saved}. Allerede på plass: ${stats.matched}. Nye plasser: ${stats.added}. Hoppet over: ${stats.skip}. Usikkert: ${stats.uncertain||0}.`);
+  refreshSimpleUI();
+  if(runError)throw runError;
+  showToast(app.lastNotice?'Se resultatet':'Autofyll ferdig',app.lastNotice||`Kontrollert: ${stats.saved} · Allerede på plass: ${stats.matched} · Nye: ${stats.added}`);
 });
 refreshList();btnBulk.disabled=true;
+
+
+async function checkSubmittedWrite(receipt){
+  if(receipt.kind==='script'){
+    const editor=await editorForRecord(receipt.record);
+    const current=await getEditorValueStable(editor);
+    assertTarget(receipt.record);
+    if(!sameTag(current,receipt.expected))return false;
+    const dirty=saveButtons(editor.panel).filter(button=>!isDisabled(button)&&/^(lagre(?: endringer)?|save(?: changes)?|oppdater|update)$/i.test(button.textContent.trim()));
+    return dirty.length===0;
+  }
+  const fresh=await getFreshRecord(receipt.record.line,receipt.record.placeholder);
+  return !!fresh&&tileHasMaterial(fresh.tile)&&materialSignature(fresh.tile)!==receipt.beforeSignature;
+}
+async function verifySubmittedWrites(receipts,stats,timeout=30000){
+  if(!receipts.length)return;
+  const pending=receipts.slice(),deadline=Date.now()+timeout;
+  app.phase='verify';app.jobLabel='Kontrollerer lagringen…';refreshSimpleUI();
+  LOG(`Etterkontroll: ${pending.length} innsendte materiell. Ingen ny innsending blir utført her.`);
+  while(pending.length&&!stopping){
+    // Give every submitted item one check before evaluating the batch deadline.
+    for(const receipt of pending.slice()){
+      if(stopping)break;
+      try{
+        if(await checkSubmittedWrite(receipt)){
+          pending.splice(pending.indexOf(receipt),1);stats.saved++;stats.pending=pending.length;
+          LOG(`✓ Linje ${receipt.record.line}, ${receipt.record.size}, placeholder ${receipt.record.placeholder}: lagringen er kontrollert.`);
+          setInfo(stats);
+        }else receipt.lastError='Innholdet eller forhåndsvisningen er ikke bekreftet ennå.';
+      }catch(error){receipt.lastError=error?.message||String(error);}
+    }
+    if(!pending.length||stopping||Date.now()>=deadline)break;
+    await sleep(350);
+  }
+  if(pending.length){
+    stats.uncertain=(stats.uncertain||0)+pending.length;stats.pending=pending.length;
+    app.lastNotice=stopping?`${pending.length} innsendte materiell ble ikke etterkontrollert fordi kjøringen ble stoppet.`
+      :`${pending.length} innsendte materiell kunne ikke bekreftes. Kontroller disse i Adpoint.`;
+    for(const receipt of pending)LOG(`! Ikke bekreftet: linje ${receipt.record.line}, placeholder ${receipt.record.placeholder}. ${receipt.lastError||'Etterkontrollen ble avbrutt.'}`);
+  }
+  app.phase='';setInfo(stats);
+}
 
 
 /* ========= simple task-based interface ========= */
@@ -1669,12 +1701,12 @@ refreshList();btnBulk.disabled=true;
     else if(app.lastNotice&&!app.busy){status.textContent=app.lastNotice;status.style.color='#ffd291';}
     else if(app.busy){
       const progress=app.lastStats;
-      status.textContent=stopping?'Stopper etter pågående steg…':(app.jobLabel||'Arbeider…')+(progress?.saved?' · '+progress.saved+' lagret':progress?.added?' · '+progress.added+' plasser opprettet':'');status.style.color='#a9cff3';
+      status.textContent=stopping?'Stopper etter pågående steg…':(app.jobLabel||'Arbeider…')+(app.phase==='verify'&&progress?.submitted?' · '+progress.saved+' av '+progress.submitted+' bekreftet':progress?.submitted?' · '+progress.submitted+' sendt':progress?.added?' · '+progress.added+' plasser opprettet':'');status.style.color='#a9cff3';
     }
     else if(app.lastStats&&((app.lastStats.saved||0)+(app.lastStats.added||0)+(app.lastStats.err||0)+(app.lastStats.uncertain||0)>0)){
       const result=app.lastStats;status.textContent=[result.saved?`${result.saved} materiell lagret`:null,result.added?`${result.added} nye plasser`:null,result.err?`${result.err} feil`:null,result.uncertain?`${result.uncertain} usikre endringer`:null].filter(Boolean).join(' · ');status.style.color='#b4dec7';
     }else{
-      status.style.color='#a9b3c4';status.textContent=!scanned.length?'Start med å hente annonsene fra Adpoint.':!count?'Velg minst én annonselinje.':mode==='empty'?'Velg størrelse og antall nye plasser.':!imports?'Velg fil eller lim inn scripts for å fortsette.':'Klar til å legge inn materiell.';
+      status.style.color='#a9b3c4';status.textContent=!scanned.length?'Start med å hente annonsene fra Adpoint.':!count?'Velg minst én annonselinje.':mode==='empty'?'Velg størrelse og antall nye plasser.':!imports?'Velg fil eller lim inn scripts for å fortsette.':'Klar. Materiellet sendes etter tur og kontrolleres samlet til slutt.';
     }
   };
   fillMode.onclick=()=>{if(app.busy)return;mode='fill';refreshSimpleUI();};
@@ -1712,15 +1744,17 @@ async function ensureCampaignView(){
   return inCampaignTableView();
 }
 async function waitForIdle(timeout=12000){
-  let quietSince=0; const started=Date.now();
-  while(Date.now()-started<timeout){
-    const busy=[...d.querySelectorAll('.MuiBackdrop-root,[role="progressbar"],.MuiCircularProgress-root')]
-      .some(el=>vis(el)&&getComputedStyle(el).opacity!=='0'&&!el.closest('#ap3p_bar'));
-    if(!busy){ if(!quietSince) quietSince=Date.now(); if(Date.now()-quietSince>=200) return true; }
-    else quietSince=0;
+  const start=Date.now();
+  while(Date.now()-start<timeout){
+    const blocking=[...d.querySelectorAll('.MuiBackdrop-root')].some(el=>{
+      if(!vis(el)||el.closest('#ap3p_bar'))return false;
+      const style=getComputedStyle(el);
+      return style.opacity!=='0'&&style.pointerEvents!=='none';
+    });
+    if(!blocking)return true;
     await sleep(90);
   }
-  throw new Error('Adpoint ble ikke ferdig innen tidsfristen. Jobben er stoppet.');
+  throw new Error('Adpoint blokkerer fortsatt grensesnittet. Jobben er stoppet.');
 }
 
 /* ========= selection shortcuts + badge ========= */
