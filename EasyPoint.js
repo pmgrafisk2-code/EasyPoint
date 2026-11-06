@@ -1,6 +1,6 @@
 javascript:(()=>{try{
 /* ============================================================
-   EasyPoint 2.7 / Adpoint — kontrollert kø og massetillegging
+   EasyPoint 2.8 / Adpoint — kontrollert kø og massetillegging
    - Norsk/engelsk Adpoint, linje- og placeholder-ID ved hvert steg
    - Én jobb om gangen; stopp/lukk venter på pågående lagring
    - Legg til antall materiellplasser uten CSV; auto-opprett ved import
@@ -1488,9 +1488,9 @@ async function inspectRecord(record){
 function sameTag(a,b){return normalizeTagForCompare(a)===normalizeTagForCompare(b);}
 function takeExistingMatches(assets,states,kind){
   const remaining=assets.slice();let matched=0;
-  if(kind==='script')for(const state of states){
-    if(isEmpty3PValue(state.value))continue;
-    const index=remaining.findIndex(item=>sameTag(item.tag,state.value));
+  for(const state of states){
+    if(kind==='script'?isEmpty3PValue(state.value):!state.contentKey)continue;
+    const index=remaining.findIndex(item=>kind==='script'?sameTag(item.tag,state.value):item===state.contentKey);
     if(index!==-1){remaining.splice(index,1);matched++;}
   }
   return {remaining,matched};
@@ -1612,11 +1612,11 @@ btnRun.onclick=()=>withJob('Legger inn materiell…',async()=>{
   const stats={items:ids.length,done:0,saved:0,submitted:0,pending:0,added:0,skip:0,err:0,matched:0};setInfo(stats);
   const submittedWrites=[],writeLedger=new Map();let runError=null;
   try{
-    await checkSharedImportConflicts(ids,map,images,settings);
+    const importLayout=await checkSharedImportConflicts(ids,map,images,settings);
     for(const id of ids){
       requireRunning();await waitForIdle();
       const records=await recordsForLine(id);
-      const groups=workGroups(id,records,map,images);
+      const groups=importWorkGroups(id,records,map,images,importLayout);
       const allowed=settings.add?await getAllowedAddSizesForLine(id):[];
       if(!groups.length){LOG(`! Linje ${id}: ingen scripts/bilder matcher linjen. Kontroller importens størrelser og linje-ID-er.`);stats.skip++;stats.done++;setInfo(stats);continue;}
       for(const group of groups){
@@ -1626,7 +1626,7 @@ btnRun.onclick=()=>withJob('Legger inn materiell…',async()=>{
           continue;
         }
         const states=[];
-        for(const record of group.records){requireRunning();states.push(await inspectRecord(record));}
+        for(const record of group.records){requireRunning();states.push(await inspectImportRecord(record,importLayout,writeLedger));}
         const matches=settings.overwrite==='empty'?takeExistingMatches(group.assets,states,group.kind):{remaining:group.assets.slice(),matched:0};
         let remaining=matches.remaining;stats.matched+=matches.matched;
         if(matches.matched)LOG(`✓ Linje ${id}, ${group.size}: ${matches.matched} scripts finnes allerede og bevares.`);
@@ -1659,6 +1659,7 @@ btnRun.onclick=()=>withJob('Legger inn materiell…',async()=>{
           }
           // Re-read immediately before writing: UI and server may have changed since planning.
           const check=await inspectRecord(state.record);
+          assertImportIdentity(check,importLayout);
           if(settings.overwrite==='empty'&&check.occupied)throw new Error('En planlagt tom plass er blitt fylt. Jobben stoppet før overskriving.');
           if(!sameTag(check.value,state.value))throw new Error('Materiellinnholdet endret seg under kjøringen. Kontroller Adpoint.');
           const writeRecord=check.writeRecord||check.record;
@@ -1765,7 +1766,7 @@ function shareScopeKey(){return selectedIds().slice().sort().join('|');}
 invalidateSharePlan=()=>{sharePlan=null;};
 function shareRecordKey(record){return record.line+'|'+record.placeholder;}
 function shareFormatKey(record){return [record.material,record.size,record.variant||'',record.side||''].join('|');}
-function shareGroupCandidates(records){
+function shareGroupCandidates(records,includeSingles=false){
   const formats=new Map(),result=[];
   for(const record of records){
     if(!record.material||!record.placeholder||!record.line||!record.size)throw new Error('Mangler Ext.nr., linje-ID, størrelse eller placeholder-ID i delingsgrunnlaget.');
@@ -1773,7 +1774,7 @@ function shareGroupCandidates(records){
     const lines=formats.get(key);if(!lines.has(record.line))lines.set(record.line,[]);lines.get(record.line).push(record);
   }
   for(const [format,lines]of formats){
-    if(lines.size<2)continue;
+    if(lines.size<2&&!includeSingles)continue;
     const lists=[...lines.values()];
     const score=items=>items.filter(record=>record.shareMasterId===record.placeholder&&!record.isChild).length*10+items.filter(record=>!record.isChild).length;
     const anchor=lists.reduce((best,items)=>items.length>best.length||(items.length===best.length&&score(items)>score(best))?items:best,lists[0]);
@@ -1804,7 +1805,7 @@ function shareGroupCandidates(records){
         const group=groups.find(group=>!assigned.has(group));if(group)assign(group,record);
       }
     }
-    result.push(...groups.filter(group=>new Set(group.peers.map(record=>record.line)).size>1));
+    result.push(...groups.filter(group=>includeSingles||new Set(group.peers.map(record=>record.line)).size>1));
   }
   return result;
 }
@@ -2047,14 +2048,73 @@ async function readExistingShareTargets(source){
   try{await openShareForRecord(source);const state=checkedShareState(source);return {existingKeys:state.existingKeys};}
   finally{await cancelShareMode();}
 }
+/* Use the same master/child pairing for import validation and execution. */
+async function buildImportLayout(ids){
+  const byId=new Map(),order=new Map(),identities=new Map();
+  const enrich=records=>records.map(record=>({...record,material:record.material||tileMaterial(record.tile)}));
+  for(const id of ids){requireRunning();byId.set(id,enrich(await recordsForLine(id)));}
+  const selectedRecords=[...byId.values()].flat(),sharedFormats=new Set(),externalLines=new Set();
+  for(const record of selectedRecords){
+    identities.set(shareRecordKey(record),{master:record.shareMasterId||record.placeholder,size:record.size,variant:record.variant||'',side:record.side||''});
+    if(record.isChild&&record.tile&&!record.shareMasterId)throw new Error(`Masteren til delt placeholder ${record.placeholder} kunne ikke leses. Ingen innlegging er startet.`);
+    if(!record.shareMasterId||!record.material)continue;
+    sharedFormats.add(shareFormatKey(record));
+    if(record.isChild&&record.tile){
+      const master=findShareMasterTile(record.tile),row=master&&dataRowForTile(master);
+      if(row&&!byId.has(rowId(row)))externalLines.add(rowId(row));
+    }
+  }
+  // The master's order also applies when only children are selected for import.
+  const all=selectedRecords.slice();
+  for(const line of externalLines){requireRunning();all.push(...enrich(await recordsForLine(line)));}
+  const linked=all.filter(record=>record.material&&sharedFormats.has(shareFormatKey(record)));
+  for(const group of shareGroupCandidates(linked,true))for(const record of group.peers)order.set(shareRecordKey(record),group.slot);
+  return {byId,order,identities};
+}
+function importWorkGroups(id,records,map,images,layout){
+  const groups=workGroups(id,records,map,images);
+  if(!layout)return groups;
+  for(const group of groups){
+    const formats=new Map();
+    group.records.forEach((record,index)=>{
+      const key=[record.size,record.variant||'',record.side||''].join('|');
+      if(!formats.has(key))formats.set(key,[]);formats.get(key).push({record,index});
+    });
+    for(const entries of formats.values()){
+      const sorted=entries.slice().sort((a,b)=>{
+        const ar=layout.order.get(shareRecordKey(a.record)),br=layout.order.get(shareRecordKey(b.record));
+        return (ar??Infinity)-(br??Infinity)||a.index-b.index;
+      });
+      entries.forEach((entry,index)=>{group.records[entry.index]=sorted[index].record;});
+    }
+  }
+  return groups;
+}
+function assertImportIdentity(state,layout){
+  const record=state.record,expected=layout?.identities.get(shareRecordKey(record));
+  if(!expected)return;
+  const master=record.shareMasterId||record.placeholder;
+  if(master!==expected.master||record.size!==expected.size||(record.variant||'')!==expected.variant||(record.side||'')!==expected.side||
+    (state.writeRecord&&state.writeRecord.placeholder!==expected.master))throw new Error('Share-koblingen eller formatet endret seg siden importkontrollen. Hent annonser på nytt før videre innlegging.');
+}
+async function inspectImportRecord(record,layout,writeLedger){
+  const state=await inspectRecord(record);assertImportIdentity(state,layout);
+  const master=state.writeRecord||state.record,submitted=writeLedger.get(state.record.shareMasterId||state.record.placeholder);
+  const contentKey=state.contentKey||(master.tile?knownImageFile(master,materialSignature(master.tile)):null);
+  if(!submitted)return {...state,contentKey};
+  // A submitted master may still look empty while Adpoint is processing it.
+  // Count it as reserved so children neither consume another version nor create new slots.
+  return {...state,occupied:true,value:submitted.kind==='script'?submitted.value:state.value,contentKey:submitted.kind==='image'?submitted.value:contentKey};
+}
+
 function desiredAssetDescriptor(kind,asset){return {kind,value:kind==='script'?normalizeTagForCompare(asset.tag):asset};}
 function sameDesiredAsset(a,b){return a.kind===b.kind&&a.value===b.value;}
 async function checkSharedImportConflicts(ids,map,images,settings){
-  if(ids.length<2)return;
+  const layout=await buildImportLayout(ids);
   const desired=new Map(),perRecord=new Map(),perSize=new Map();
   for(const id of ids){
     requireRunning();
-    for(const group of workGroups(id,await recordsForLine(id),map,images))group.records.forEach((record,index)=>{
+    for(const group of importWorkGroups(id,layout.byId.get(id),map,images,layout))group.records.forEach((record,index)=>{
       const asset=settings.reuse?group.assets[index%group.assets.length]:group.assets[index];if(!asset)return;
       const descriptor=desiredAssetDescriptor(group.kind,asset),old=desired.get(record.shareMasterId||record.placeholder);
       if(old&&!sameDesiredAsset(old,descriptor))throw new Error(`Placeholder ${record.placeholder} er allerede delt, men importen angir ulikt materiell på de koblede linjene. Ingen innlegging er startet.`);
@@ -2063,20 +2123,24 @@ async function checkSharedImportConflicts(ids,map,images,settings){
       if(!perSize.has(record.size))perSize.set(record.size,new Map());perSize.get(record.size).set(key,{record,descriptor});
     });
   }
-  if(!settings.share)return;
+  if(!settings.share)return layout;
   // Native Share may retain different placeholder IDs. Probe only sizes for which
   // this import asks for distinct versions; one global asset per size needs no extra menu pass.
   for(const values of perSize.values()){
     const items=[...values.values()];
     if(!items.some(item=>!sameDesiredAsset(item.descriptor,items[0].descriptor)))continue;
     for(const item of items){
-      requireRunning();const native=await readExistingShareTargets(item.record);
+      requireRunning();
+      // Visible master IDs already prove these links and were compared above.
+      if(item.record.shareMasterId)continue;
+      const native=await readExistingShareTargets(item.record);
       for(const key of native.existingKeys){
         const target=perRecord.get(key);
         if(target&&!sameDesiredAsset(item.descriptor,target.descriptor))throw new Error(`Adpoint viser en eksisterende Share-kobling mellom ${shareRecordKey(item.record)} og ${key}, men importen angir ulikt materiell. Ingen innlegging er startet.`);
       }
     }
   }
+  return layout;
 }
 function importAllowsShareGroup(group,states,map,images){
   const source=states.find(state=>state.occupied&&(!isEmpty3PValue(state.value)||state.contentKey));
