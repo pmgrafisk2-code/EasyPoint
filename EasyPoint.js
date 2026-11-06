@@ -1,6 +1,6 @@
 javascript:(()=>{try{
 /* ============================================================
-   EasyPoint 2.3 / Adpoint — kontrollert kø og massetillegging
+   EasyPoint 2.4 / Adpoint — kontrollert kø og massetillegging
    - Norsk/engelsk Adpoint, linje- og placeholder-ID ved hvert steg
    - Én jobb om gangen; stopp/lukk venter på pågående lagring
    - Legg til antall materiellplasser uten CSV; auto-opprett ved import
@@ -1227,38 +1227,142 @@ const bulkNote=d.createElement('span');bulkNote.textContent='Antall er nye plass
 [bulkPlus,btnBulk].forEach(btn=>btn.style.cssText='cursor:pointer;border:1px solid #0284c7;border-radius:6px;padding:5px 8px;background:#1a1d27;color:#e6e6e6');
 bulk.append(bulkLabel,bulkPlus,btnBulk,bulkNote,bulkRows);body.insertBefore(bulk,drop);
 const bulkControls=[];
+const bulkExcluded=new Set(),bulkMemory=new Map();
+let bulkCampaignKey='',bulkScopeKey=null,syncingBulk=false;
+const bulkDefaultWrap=d.createElement('div');bulkDefaultWrap.className='ep-row';
+const bulkDefaultLabel=d.createElement('label');bulkDefaultLabel.style.cssText='display:flex;align-items:center;gap:9px;font-weight:600';
+const bulkDefaultText=d.createElement('span');bulkDefaultText.textContent='Felles antall';
+const bulkDefaultCount=d.createElement('input');bulkDefaultCount.type='number';bulkDefaultCount.min='1';bulkDefaultCount.step='1';bulkDefaultCount.value='1';bulkDefaultCount.setAttribute('aria-label','Felles antall nye plasser per størrelse og linje');
+bulkDefaultCount.style.cssText='width:86px;background:#161922;color:#eee;border:1px solid #3a3f52;padding:6px;border-radius:5px';
+bulkDefaultLabel.append(bulkDefaultText,bulkDefaultCount);bulkDefaultWrap.append(bulkDefaultLabel);
+const bulkSummary=d.createElement('p');bulkSummary.className='ep-help';bulkSummary.setAttribute('aria-live','polite');
+const bulkEmpty=d.createElement('p');bulkEmpty.className='ep-help';
 function availableBulkOptions(){
   const map=new Map();
-  for(const line of scanned)for(const option of line.allowed||[]){
+  for(const line of scanned.filter(item=>selected.has(item.id)))for(const option of line.allowed||[]){
     const key=option.size+'|'+(option.variant||'')+'|'+option.label;
     if(!map.has(key))map.set(key,{...option,key});
   }
   return [...map.values()];
 }
-function refreshBulkOptions(){
-  const options=availableBulkOptions();
-  for(const control of bulkControls){
-    const chosen=control.select.value;control.select.replaceChildren();
-    for(const option of options){const el=d.createElement('option');el.value=option.key;el.textContent=option.label+(option.variant&&!parseSizeVariant(option.label).variant?' ('+option.variant+')':'');control.select.append(el);}
-    if(options.some(x=>x.key===chosen))control.select.value=chosen;
-    if(!options.length){const el=d.createElement('option');el.textContent='Skann for å hente størrelser';el.value='';control.select.append(el);}
+function fillBulkSelect(control,options,key=control.select.value){
+  control.select.replaceChildren();
+  for(const option of options){
+    const el=d.createElement('option');el.value=option.key;
+    el.textContent=option.label+(option.variant&&!parseSizeVariant(option.label).variant?' ('+option.variant+')':'');
+    el.disabled=bulkControls.some(other=>other!==control&&other.select.value===option.key);
+    control.select.append(el);
   }
+  control.select.value=key;control.lastKey=key;
+}
+function rememberBulkCount(control){if(control.lastKey)bulkMemory.set(control.lastKey,control.count.value);}
+function createBulkRow(option){
+  const row=d.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;flex-wrap:wrap';
+  const select=d.createElement('select');select.setAttribute('aria-label','Størrelse for nye materiellplasser');select.style.cssText='flex:1;min-width:140px;background:#161922;color:#eee;border:1px solid #3a3f52;padding:5px;border-radius:5px';
+  const count=d.createElement('input');count.type='number';count.min='1';count.step='1';count.value=bulkMemory.get(option.key)??'';
+  count.setAttribute('aria-label','Eget antall for denne størrelsen; tomt felt bruker felles antall');count.style.cssText='width:98px;background:#161922;color:#eee;border:1px solid #3a3f52;padding:5px;border-radius:5px';
+  const quantity=d.createElement('label');quantity.style.cssText='display:flex;align-items:center;gap:5px;font-size:12px;color:#a9b3c4';
+  const quantityText=d.createElement('span');quantityText.textContent='Eget antall';quantity.append(quantityText,count);
+  const remove=d.createElement('button');remove.textContent='×';remove.title='Fjern størrelse';remove.setAttribute('aria-label','Fjern størrelse');
+  remove.style.cssText='cursor:pointer;border:1px solid #3a3f52;border-radius:5px;background:#161922;color:#ddd;padding:4px 8px';
+  const control={row,select,count,remove,lastKey:option.key};bulkControls.push(control);
+  row.append(select,quantity,remove);bulkRows.append(row);fillBulkSelect(control,availableBulkOptions(),option.key);
+  count.oninput=()=>{if(app.busy)return;rememberBulkCount(control);refreshSimpleUI();};
+  select.onchange=()=>{
+    if(app.busy)return;
+    const key=select.value,old=control.lastKey;
+    if(bulkControls.some(other=>other!==control&&other.select.value===key)){select.value=old;showToast('Størrelsen er allerede valgt');return;}
+    rememberBulkCount(control);if(old)bulkExcluded.add(old);bulkExcluded.delete(key);
+    control.lastKey=key;count.value=bulkMemory.get(key)??'';
+    refreshBulkOptions();refreshSimpleUI();
+  };
+  remove.onclick=()=>{
+    if(app.busy)return;
+    rememberBulkCount(control);bulkExcluded.add(control.lastKey);row.remove();bulkControls.splice(bulkControls.indexOf(control),1);
+    refreshBulkOptions();refreshSimpleUI();adjustHeights();
+  };
+  return control;
+}
+function syncBulkSelection(){
+  if(app.busy||syncingBulk)return;
+  syncingBulk=true;
+  try{
+    const campaign=scanned.map(item=>item.id).sort().join('|');
+    if(campaign!==bulkCampaignKey){
+      for(const control of bulkControls)control.row.remove();bulkControls.length=0;
+      bulkMemory.clear();bulkExcluded.clear();bulkCampaignKey=campaign;bulkScopeKey=null;
+    }
+    const options=availableBulkOptions(),scope=JSON.stringify(options.map(option=>option.key));
+    if(scope===bulkScopeKey)return;
+    bulkScopeKey=scope;
+    for(const control of bulkControls.slice()){
+      if(!options.some(option=>option.key===control.lastKey)){
+        rememberBulkCount(control);control.row.remove();bulkControls.splice(bulkControls.indexOf(control),1);
+      }
+    }
+    for(const option of options){
+      if(!bulkExcluded.has(option.key)&&!bulkControls.some(control=>control.lastKey===option.key))createBulkRow(option);
+    }
+    for(const control of bulkControls)fillBulkSelect(control,options,control.lastKey);
+  }finally{syncingBulk=false;}
+}
+function refreshBulkOptions(){
+  syncBulkSelection();const options=availableBulkOptions();
+  for(const control of bulkControls)fillBulkSelect(control,options,control.lastKey);
 }
 function addBulkRow(){
   if(app.busy)return;
-  const row=d.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center';
-  const select=d.createElement('select');select.setAttribute('aria-label','Størrelse for nye materiellplasser');select.style.cssText='flex:1;min-width:140px;background:#161922;color:#eee;border:1px solid #3a3f52;padding:4px;border-radius:5px';
-  const count=d.createElement('input');count.type='number';count.min='1';count.step='1';count.value='1';count.setAttribute('aria-label','Antall nye materiellplasser per linje');count.style.cssText='width:68px;background:#161922;color:#eee;border:1px solid #3a3f52;padding:4px;border-radius:5px';
-  const remove=d.createElement('button');remove.textContent='×';remove.title='Fjern størrelse';
-  const control={row,select,count,remove};bulkControls.push(control);
-  remove.onclick=()=>{if(app.busy)return;row.remove();bulkControls.splice(bulkControls.indexOf(control),1);adjustHeights(ui.getBoundingClientRect().height);};
-  const quantity=d.createElement('label');quantity.style.cssText='display:flex;align-items:center;gap:5px;font-size:12px;color:#a9b3c4';const quantityText=d.createElement('span');quantityText.textContent='Antall';quantity.append(quantityText,count);remove.setAttribute('aria-label','Fjern størrelse');row.append(select,quantity,remove);bulkRows.append(row);refreshBulkOptions();adjustHeights(ui.getBoundingClientRect().height);
+  const option=availableBulkOptions().find(item=>!bulkControls.some(control=>control.lastKey===item.key));
+  if(!option)return;
+  bulkExcluded.delete(option.key);createBulkRow(option);refreshBulkOptions();refreshSimpleUI();adjustHeights();
 }
-bulkPlus.onclick=addBulkRow;addBulkRow();
+function positiveBulkCount(value){const count=Number(value);return Number.isSafeInteger(count)&&count>0?count:null;}
+function bulkRequests(){
+  const fallback=positiveBulkCount(bulkDefaultCount.value);
+  if(!fallback)throw new Error('Felles antall må være et positivt heltall.');
+  const options=availableBulkOptions(),requests=new Map();
+  for(const control of bulkControls){
+    const option=options.find(item=>item.key===control.select.value);
+    const text=control.count.value.trim(),count=text?positiveBulkCount(text):fallback;
+    if(!option||!count)throw new Error('Velg en størrelse og et positivt heltall for hver rad. Tomt eget antall bruker felles antall.');
+    const existing=requests.get(option.key);
+    if(existing){existing.count+=count;if(!Number.isSafeInteger(existing.count))throw new Error('Antallet er for stort.');}
+    else requests.set(option.key,{...option,count});
+  }
+  if(!requests.size)throw new Error('Legg til minst én størrelse.');
+  return [...requests.values()];
+}
+function bulkPlanPreview(){
+  try{
+    const requests=bulkRequests();let total=0;const lines=new Set();
+    for(const line of scanned.filter(item=>selected.has(item.id)))for(const request of requests){
+      if((line.allowed||[]).some(option=>option.size===request.size&&option.label===request.label&&(option.variant||null)===(request.variant||null))){
+        total+=request.count;lines.add(line.id);
+      }
+    }
+    if(!Number.isSafeInteger(total))throw new Error('Samlet antall er for stort.');
+    return {valid:total>0,total,lines:lines.size};
+  }catch(error){return {valid:false,total:0,lines:0,error:error.message};}
+}
+function updateBulkSummary(){
+  for(const control of bulkControls)control.count.placeholder='Felles: '+(bulkDefaultCount.value||'…');
+  bulkDefaultCount.disabled=app.busy;
+  const plan=bulkPlanPreview();
+  bulkSummary.textContent=!scanned.length?'Hent annonser for å finne størrelsene.':!selected.size?'Velg minst én annonselinje.'
+    :plan.valid?`${plan.total} nye plasser totalt på ${plan.lines} ${plan.lines===1?'linje':'linjer'}.`
+    :plan.error||'Ingen størrelser er tilgjengelige på valgte linjer.';
+  bulkEmpty.textContent=availableBulkOptions().length?'Alle størrelser er fjernet. Bruk «Legg til en størrelse» for å hente dem tilbake.'
+    :'Ingen tilgjengelige størrelser på de valgte linjene.';
+  if(bulkControls.length)bulkEmpty.setAttribute('hidden','');else bulkEmpty.removeAttribute('hidden');
+  return plan;
+}
+bulkDefaultCount.oninput=()=>{if(!app.busy)refreshSimpleUI();};
+bulkPlus.onclick=addBulkRow;refreshBulkOptions();
+
 
 function setBusy(value){
   app.busy=value;
-  const controls=[btnScan,btnRun,btnBulk,bulkPlus,btnCSV,btnPaste,mapClear,reuseCb,addCb,owCb,btnAll,btnNone,btnInv,
+  const controls=[bulkDefaultCount,btnScan,btnRun,btnBulk,bulkPlus,btnCSV,btnPaste,mapClear,reuseCb,addCb,owCb,btnAll,btnNone,btnInv,
     ...bulkControls.flatMap(x=>[x.select,x.count,x.remove])];
   for(const control of controls)control.disabled=value;
   if(!value){reuseCb.disabled=addExtraSizes;btnBulk.disabled=!scanned.length;}
@@ -1392,18 +1496,6 @@ btnScan.onclick=()=>withJob('Skanner Adpoint…',async()=>{
 });
 
 function selectedIds(){return scanned.filter(x=>selected.has(x.id)).map(x=>x.id);}
-function bulkRequests(){
-  const options=availableBulkOptions(),requests=new Map();
-  for(const control of bulkControls){
-    const option=options.find(x=>x.key===control.select.value),count=Number(control.count.value);
-    if(!option||!Number.isSafeInteger(count)||count<1)throw new Error('Velg en størrelse og et positivt heltall for hver rad.');
-    const existing=requests.get(option.key);
-    if(existing){existing.count+=count;if(!Number.isSafeInteger(existing.count))throw new Error('Antallet er for stort.');}
-    else requests.set(option.key,{...option,count});
-  }
-  if(!requests.size)throw new Error('Legg til minst én størrelse.');
-  return [...requests.values()];
-}
 btnBulk.onclick=()=>withJob('Legger til materiellplasser…',async()=>{
   const ids=selectedIds();if(!ids.length)throw new Error('Skann og velg minst én linje først.');
   const requests=bulkRequests(),plan=[];
@@ -1648,9 +1740,9 @@ async function verifySubmittedWrites(receipts,stats,timeout=30000){
 
   bulk.id='ep-empty-card';bulk.className='ep-card';bulk.style.cssText='';
   bulkLabel.textContent='2. Velg størrelse og antall';bulkLabel.className='ep-heading';bulkLabel.style.fontSize='14px';
-  bulkNote.textContent='Antallet er per valgt linje. Størrelsen må være tilgjengelig i Adpoint.';bulkNote.className='ep-help';bulkNote.style.cssText='';
+  bulkNote.textContent='Størrelsene velges automatisk fra valgte linjer. Fjern de du ikke vil ha. Tomt «Eget antall» bruker felles antall.';bulkNote.className='ep-help';bulkNote.style.cssText='';
   bulkPlus.textContent='+ Legg til en størrelse';bulkPlus.style.alignSelf='flex-start';
-  bulk.replaceChildren(bulkLabel,bulkNote,bulkRows,bulkPlus);
+  bulk.replaceChildren(bulkLabel,bulkNote,bulkDefaultWrap,bulkRows,bulkEmpty,bulkPlus,bulkSummary);
 
   const options=make('details','','ep-options');
   const optionsSummary=make('summary','Flere valg');
@@ -1676,6 +1768,8 @@ async function verifySubmittedWrites(receipts,stats,timeout=30000){
   body.replaceChildren(taskSwitch,scanCard,fillCard,bulk,options,action,diagnostics);
   let mode='fill';
   refreshSimpleUI=()=>{
+    syncBulkSelection();
+    const bulkPlan=updateBulkSummary();
     const ids=selectedIds(),count=ids.length;
     let images=0;imagePool.forEach(items=>images+=items.length);
     const imports=mapping.length+images;
@@ -1690,9 +1784,9 @@ async function verifySubmittedWrites(receipts,stats,timeout=30000){
     selectionSummary.textContent=count===scanned.length?`Alle ${count} linjer er valgt · endre utvalg`:`${count} av ${scanned.length} linjer er valgt · endre utvalg`;
     mapChip.className='';mapChip.textContent=[mapping.length?`${mapping.length} scripts`:null,images?`${images} bilder`:null].filter(Boolean).join(' og ')+' klare';
     btnRun.textContent=count?`Legg inn på ${count} ${count===1?'linje':'linjer'}`:'Legg inn materiell';
-    btnBulk.textContent=count?`Opprett plasser på ${count} ${count===1?'linje':'linjer'}`:'Opprett materiellplasser';
-    btnRun.disabled=app.busy||!count||!imports;btnBulk.disabled=app.busy||!count||!availableBulkOptions().length;
-    bulkPlus.disabled=app.busy||!scanned.length;
+    btnBulk.textContent=bulkPlan.valid?`Opprett ${bulkPlan.total} ${bulkPlan.total===1?'materiellplass':'materiellplasser'}`:'Opprett materiellplasser';
+    btnRun.disabled=app.busy||!count||!imports;btnBulk.disabled=app.busy||!count||!bulkPlan.valid;
+    bulkPlus.disabled=app.busy||!count;hidden(bulkPlus,!availableBulkOptions().some(option=>!bulkControls.some(control=>control.lastKey===option.key)));
     policy.textContent=overwriteMode==='all'?'Erstatter eksisterende materiell.':'Bevarer eksisterende materiell.';
     if(addExtraSizes)policy.textContent+=' Oppretter manglende plasser.';
     policy.setAttribute('data-replace',String(overwriteMode==='all'));
