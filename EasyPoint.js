@@ -1,6 +1,6 @@
 javascript:(()=>{try{
 /* ============================================================
-   EasyPoint 2.9 / Adpoint — kontrollert kø og massetillegging
+   EasyPoint 2.10 / Adpoint — kontrollert kø og massetillegging
    - Norsk/engelsk Adpoint, linje- og placeholder-ID ved hvert steg
    - Én jobb om gangen; stopp/lukk venter på pågående lagring
    - Legg til antall materiellplasser uten CSV; auto-opprett ved import
@@ -195,32 +195,90 @@ function rawTileSize(tile){
   const match=text.match(/(\d{2,4})\s*[x×]\s*(\d{2,4})/i)||tileOwnLabel(tile).match(/(\d{2,4})\s*[x×]\s*(\d{2,4})/i);
   return match?`${match[1]}x${match[2]}`:'';
 }
-function shareTileInfo(tile){
-  const container=tile?.closest('.set-creativeContainer');
-  const badge=container&&[...container.children].find(el=>/related line items|relaterte.*linjer/i.test(el.getAttribute('title')||''));
-  const text=badge?.textContent.trim()||'';
-  return {isChild:/files cannot be uploaded to child\s+placeholders|upload your creative directly to the master placeholder/i.test(tile?.textContent||''),group:/^\d+$/.test(text)?text:null};
-}
 function tileMaterial(tile){
   const row=dataRowForTile(tile);if(!row)return '';
   const {rosenrIdx}=getHeaderIdxForRow(row);return row.children[rosenrIdx]?.textContent.trim()||'';
 }
+/* Filled children lose their upload warning. Resolve roles from evidence, never its absence. */
+const shareRoleEvidence=new Map();
+function shareBadge(tile){
+  const container=tile?.closest('.set-creativeContainer');
+  const badge=container&&[...container.children].find(el=>/related line items|relaterte.*linjer/i.test(el.getAttribute('title')||''));
+  const text=badge?.textContent.trim()||'';return /^\d+$/.test(text)?text:null;
+}
+function shareRoleKey(tile){const row=dataRowForTile(tile),id=placeholderId(tile);return row&&id?rowId(row)+'|'+id:null;}
+function rememberShareRole(tile,role){
+  const key=shareRoleKey(tile),group=shareBadge(tile);
+  if(key&&group)shareRoleEvidence.set(key,{role,group,material:tileMaterial(tile)});
+}
+function shareTileInfo(tile){
+  const group=shareBadge(tile),text=tile?.textContent||'';
+  const warning=/files cannot be uploaded to child\s+placeholders|upload your creative directly to the master placeholder/i.test(text);
+  let role=warning?'child':group?'unknown':'unlinked';
+  if(group){
+    const stored=shareRoleEvidence.get(shareRoleKey(tile));
+    if(warning)rememberShareRole(tile,'child');
+    else if(/forventet størrelse|expected size/i.test(tile?.querySelector('.set-materialCardContent')?.textContent||'')){role='master';rememberShareRole(tile,role);}
+    else if(stored?.group===group&&stored.material===tileMaterial(tile))role=stored.role;
+  }
+  return {isChild:role==='child',group,role};
+}
 function findShareMasterTile(tile){
   const info=shareTileInfo(tile);if(!info.group)return null;
-  if(!info.isChild)return tile;
+  if(info.role==='master')return tile;
   const material=tileMaterial(tile),key=material+'|'+info.group,cached=shareMasterTiles.get(key);
-  if(cached?.isConnected){const current=shareTileInfo(cached);if(!current.isChild&&current.group===info.group&&tileMaterial(cached)===material)return cached;}
+  if(cached?.isConnected){const current=shareTileInfo(cached);if(current.role==='master'&&current.group===info.group&&tileMaterial(cached)===material)return cached;}
   const masters=getAllTiles(d).filter(candidate=>{
     if(!candidate.isConnected)return false;
-    const meta=shareTileInfo(candidate);return !meta.isChild&&meta.group===info.group&&tileMaterial(candidate)===material;
+    const meta=shareTileInfo(candidate);return meta.role==='master'&&meta.group===info.group&&tileMaterial(candidate)===material;
   });
   if(new Set(masters.map(placeholderId)).size!==1)return null;
   const master=masters[0];shareMasterTiles.set(key,master);return master;
 }
 function recordShareMetadata(tile){
-  const info=shareTileInfo(tile),master=findShareMasterTile(tile);
-  return {isChild:info.isChild,shareGroupId:info.group,shareMasterId:master?placeholderId(master):null};
+  const info=shareTileInfo(tile),master=findShareMasterTile(tile),id=placeholderId(tile),masterId=master?placeholderId(master):null;
+  return {isChild:info.isChild||!!(masterId&&masterId!==id),shareGroupId:info.group,shareMasterId:masterId};
 }
+async function readNativeShareRole(tile){
+  const id=placeholderId(tile),line=dataRowForTile(tile)&&rowId(dataRowForTile(tile)),group=shareBadge(tile);
+  if(!id||!line||!group||!tile.isConnected)throw new Error('Kan ikke bekrefte materiellplassen før lesing av Share-status.');
+  if(getShareControls())throw new Error('Avslutt den åpne Share-flyten før du henter materiell på nytt.');
+  const buttons=[...tile.querySelectorAll('button[aria-haspopup="true"]')].filter(button=>vis(button)&&!isDisabled(button));
+  if(buttons.length!==1)throw new Error(`Placeholder ${id}: fant ikke én meny for å lese master/child-status.`);
+  const before=new Set([...d.querySelectorAll('[role="menu"]')].filter(vis));let menu=null;
+  try{
+    buttons[0].click();
+    menu=await waitFor(()=>{const menus=[...d.querySelectorAll('[role="menu"]')].filter(el=>vis(el)&&!before.has(el));return menus.length===1?menus[0]:null;},3500,70);
+    if(!menu)throw new Error(`Placeholder ${id}: menyen for Share-status åpnet seg ikke entydig.`);
+    const labels=[...menu.querySelectorAll('[role="menuitem"]')].map(el=>el.textContent.trim().replace(/\s+/g,' '));
+    const master=labels.some(label=>/^share\s*\/\s*unshare$/i.test(label)),child=labels.some(label=>/^unshare$/i.test(label));
+    if(master===child)throw new Error(`Placeholder ${id}: menyen viser ikke entydig master/child-status. Ingen Share-valg er utført.`);
+    if(!tile.isConnected||placeholderId(tile)!==id||rowId(dataRowForTile(tile))!==line||shareBadge(tile)!==group)throw new Error('Materiellplassen endret seg mens Share-status ble lest. Hent på nytt.');
+    const role=master?'master':'child';rememberShareRole(tile,role);return role;
+  }finally{
+    if(menu){await closeMaterialMenu(menu);if(!await waitFor(()=>!vis(menu),1800,70))throw new Error('Kunne ikke lukke menyen etter lesing av Share-status. Ingen materiell er sendt fra dette steget.');}
+  }
+}
+async function ensureShareRolesForTiles(tiles){
+  const unresolved=new Map();
+  for(const tile of tiles){
+    const info=shareTileInfo(tile);
+    if(info.group&&(info.role==='unknown'||!findShareMasterTile(tile)))unresolved.set(tileMaterial(tile)+'|'+info.group,{material:tileMaterial(tile),group:info.group});
+  }
+  for(const {material,group}of unresolved.values()){
+    const peers=getAllTiles(d).filter(tile=>tile.isConnected&&tileMaterial(tile)===material&&shareBadge(tile)===group);
+    let masters=peers.filter(tile=>shareTileInfo(tile).role==='master');
+    if(!masters.length){
+      for(const tile of peers.filter(tile=>shareTileInfo(tile).role==='unknown')){
+        if(await readNativeShareRole(tile)==='master'){masters=[tile];break;}
+      }
+    }
+    if(masters.length!==1)throw new Error(`Delingsgruppe ${group}: fant ikke én bekreftet master. Ingen koblinger er endret.`);
+    const master=masters[0];shareMasterTiles.set(material+'|'+group,master);
+    for(const tile of peers)if(tile!==master&&shareTileInfo(tile).role==='unknown')rememberShareRole(tile,'child');
+  }
+}
+
 function sizesFromExpanded(details){
   if(!details)return [];
   const tiles=getAllTiles(details),entries=[];
@@ -804,6 +862,7 @@ function addImagesToPool(files){
     imagePool.get(key).push(f);
     added++;
   }
+  if(added){app.lastStats=null;app.lastError='';app.lastNotice='';}
   renderMapChip();
   flash(mapChip); flash(drop);
   showToast('Bilder lagt til',`Antall: ${added}`);
@@ -1123,6 +1182,7 @@ function renderMapChip(){
   refreshSimpleUI();
 }
 function saveMap(arr){
+  app.lastStats=null;app.lastError='';app.lastNotice='';
   mapping=arr;
   S(MAP_KEY,mapping);
   renderMapChip();
@@ -1130,6 +1190,7 @@ function saveMap(arr){
   showToast('Importert',`CSV-rader: ${mapping.length}`);
 }
 function clearMap(){
+  app.lastStats=null;app.lastError='';app.lastNotice='';
   mapping=[];
   S(MAP_KEY,mapping);
   renderMapChip();
@@ -1262,22 +1323,34 @@ async function importFiles(files){
     refreshSimpleUI();
   }catch(error){showToast('Kunne ikke importere',error.message);LOG('! Import feilet: '+error.message);}
 }
+const fileDropOverlay=d.createElement('div');fileDropOverlay.className='ep-file-overlay';fileDropOverlay.setAttribute('hidden','');fileDropOverlay.setAttribute('aria-hidden','true');fileDropOverlay.setAttribute('role','status');
+const fileDropArrow=d.createElement('div');fileDropArrow.className='ep-file-arrow';fileDropArrow.textContent='↓';
+const fileDropHeading=d.createElement('strong');fileDropHeading.textContent='Slipp filene her';
+const fileDropHelp=d.createElement('span');fileDropHelp.textContent='CSV, JSON og bilder · hele EasyPoint tar imot';
+fileDropOverlay.append(fileDropArrow,fileDropHeading,fileDropHelp);ui.append(fileDropOverlay);
+function showFileDrag(){
+  const rect=ui.getBoundingClientRect();
+  Object.assign(fileDropOverlay.style,{left:(rect.left+1)+'px',top:(rect.top+1)+'px',width:Math.max(0,rect.width-2)+'px',height:Math.max(0,rect.height-2)+'px'});
+  fileDropOverlay.setAttribute('data-compact',String(rect.height<120));
+  fileDropOverlay.removeAttribute('hidden');fileDropOverlay.setAttribute('aria-hidden','false');ui.classList.add('ep-file-over');
+}
+
 let fileDragDepth=0;
 function isFileDrag(event){
   const transfer=event.dataTransfer;
   return !!transfer&&([...(transfer.types||[])].includes('Files')||[...(transfer.items||[])].some(item=>item.kind==='file')||!!transfer.files?.length);
 }
-function clearFileDrag(){fileDragDepth=0;ui.classList.remove('ep-file-over');}
+function clearFileDrag(){fileDragDepth=0;ui.classList.remove('ep-file-over');fileDropOverlay.setAttribute('hidden','');fileDropOverlay.setAttribute('aria-hidden','true');}
 listen(ui,'dragenter',event=>{
   if(!isFileDrag(event))return;
   event.preventDefault();event.stopPropagation();fileDragDepth++;
-  if(!app.busy)ui.classList.add('ep-file-over');
+  if(!app.busy)showFileDrag();
 });
 listen(ui,'dragover',event=>{
   if(!isFileDrag(event))return;
   event.preventDefault();event.stopPropagation();
   event.dataTransfer.dropEffect=app.busy?'none':'copy';
-  if(!app.busy)ui.classList.add('ep-file-over');
+  if(!app.busy)showFileDrag();
 });
 listen(ui,'dragleave',event=>{
   if(!fileDragDepth)return;
@@ -1495,6 +1568,7 @@ async function readLineRecordsSnapshot(id){
     const tiles=getAllTiles(detail);
     // Read complete snapshots. Dropping an unfinished card can shift versions or trigger extra slots.
     if(tiles.some(tile=>!placeholderId(tile)))return {issue:'fant en materiellplass uten entydig lesbar placeholder-ID.'};
+    await ensureShareRolesForTiles(tiles);
     let entries;
     try{entries=sizesFromExpanded(detail);}
     catch(error){if(/^Kan ikke lese størrelsen til delt placeholder/.test(error.message))return {issue:error.message};throw error;}
@@ -1502,7 +1576,7 @@ async function readLineRecordsSnapshot(id){
     for(const entry of entries){
       const placeholder=placeholderId(entry.tile);
       if(!placeholder)return {issue:'fant en materiellplass uten entydig lesbar placeholder-ID.'};
-      if(entry.isChild&&!entry.shareMasterId)return {issue:`masteren til delt placeholder ${placeholder} er ikke lesbar i visningen ennå.`};
+      if(entry.shareGroupId&&!entry.shareMasterId)return {issue:`masteren til delt placeholder ${placeholder} er ikke lesbar i visningen ennå.`};
       if(seen.has(placeholder))continue;seen.add(placeholder);
       records.push({...entry,line:String(id),placeholder});
     }
@@ -1597,6 +1671,7 @@ function renderPreview(byId){
 
 btnScan.onclick=()=>withJob('Skanner Adpoint…',async()=>{
   log.textContent='';
+  shareRoleEvidence.clear();shareMasterTiles.clear();
   await waitForIdle();
   const rows=findRows();if(!rows.length)throw new Error('Fant ingen kampanjelinjer på denne siden.');
   const ids=rows.map(rowId);
@@ -2105,17 +2180,45 @@ async function readExistingShareTargets(source){
   try{await openShareForRecord(source);const state=checkedShareState(source);return {existingKeys:state.existingKeys};}
   finally{await cancelShareMode();}
 }
-/* Use the same master/child pairing for import validation and execution. */
+/* Read existing master IDs for import; new Share pairing belongs to the Share task. */
+/* Align imports by actual master IDs. Importing never proposes new Share pairings. */
+function nativeImportOrder(records){
+  const formats=new Map(),order=new Map();
+  for(const record of records){
+    const key=shareFormatKey(record);if(!formats.has(key))formats.set(key,new Map());
+    const lines=formats.get(key);if(!lines.has(record.line))lines.set(record.line,[]);lines.get(record.line).push(record);
+  }
+  for(const lines of formats.values()){
+    const sourcePositions=new Map();
+    for(const items of lines.values())items.forEach((record,index)=>{if(!record.isChild)sourcePositions.set(record.placeholder,index+1);});
+    for(const items of lines.values()){
+      const occupied=new Set();
+      for(const record of items){
+        if(!record.shareMasterId)continue;
+        const position=sourcePositions.get(record.shareMasterId);
+        if(position){order.set(shareRecordKey(record),position);occupied.add(position);}
+        else if(record.isChild&&record.tile)throw new Error(`Masteren ${record.shareMasterId} til placeholder ${record.placeholder} mangler i importgrunnlaget.`);
+      }
+      let next=1;
+      for(const record of items){
+        if(order.has(shareRecordKey(record)))continue;
+        while(occupied.has(next))next++;
+        order.set(shareRecordKey(record),next);occupied.add(next++);
+      }
+    }
+  }
+  return order;
+}
+
 async function buildImportLayout(ids){
-  const byId=new Map(),order=new Map(),identities=new Map();
+  const byId=new Map(),identities=new Map();
   const enrich=records=>records.map(record=>({...record,material:record.material||tileMaterial(record.tile)}));
   for(const id of ids){requireRunning();byId.set(id,enrich(await recordsForLine(id)));}
-  const selectedRecords=[...byId.values()].flat(),sharedFormats=new Set(),externalLines=new Set();
+  const selectedRecords=[...byId.values()].flat(),externalLines=new Set();
   for(const record of selectedRecords){
     identities.set(shareRecordKey(record),{master:record.shareMasterId||record.placeholder,size:record.size,variant:record.variant||'',side:record.side||''});
     if(record.isChild&&record.tile&&!record.shareMasterId)throw new Error(`Masteren til delt placeholder ${record.placeholder} kunne ikke leses. Ingen innlegging er startet.`);
     if(!record.shareMasterId||!record.material)continue;
-    sharedFormats.add(shareFormatKey(record));
     if(record.isChild&&record.tile){
       const master=findShareMasterTile(record.tile),row=master&&dataRowForTile(master);
       if(row&&!byId.has(rowId(row)))externalLines.add(rowId(row));
@@ -2124,8 +2227,7 @@ async function buildImportLayout(ids){
   // The master's order also applies when only children are selected for import.
   const all=selectedRecords.slice();
   for(const line of externalLines){requireRunning();all.push(...enrich(await recordsForLine(line)));}
-  const linked=all.filter(record=>record.material&&sharedFormats.has(shareFormatKey(record)));
-  for(const group of shareGroupCandidates(linked,true))for(const record of group.peers)order.set(shareRecordKey(record),group.slot);
+  const order=nativeImportOrder(all);
   return {byId,order,identities};
 }
 function importWorkGroups(id,records,map,images,layout){
@@ -2222,12 +2324,51 @@ async function runImportedShare(ids,map,images,settings,stats){
 }
 
 
+function renderResultStatus(status,imports){
+  const result=app.lastStats||{},saved=result.saved||0,submitted=result.submitted||0;
+  if(app.lastError){
+    status.setAttribute('data-state','error');status.textContent=`Avbrutt · Bekreftet lagret i Adpoint: ${saved}.\n${app.lastError}`;return;
+  }
+  if(app.busy){
+    status.setAttribute('data-state','working');
+    if(app.phase==='verify')status.textContent=`Kontrollerer lagring i Adpoint · ${saved} av ${submitted} bekreftet`;
+    else if(submitted)status.textContent=`${submitted} sendt til Adpoint · ${saved} bekreftet lagret`+(stopping?' · stopper etter pågående steg':'');
+    return;
+  }
+  if((result.uncertain||0)>0){status.setAttribute('data-state','warning');status.textContent=`${saved} bekreftet lagret i Adpoint · ${result.uncertain} må kontrolleres\n`+(app.lastNotice||'Se detaljer for materiell som ikke er bekreftet.');return;}
+  if(result.shareSkipped){status.setAttribute('data-state','warning');status.textContent=`${saved} bekreftet lagret i Adpoint · ${result.shareSkipped} Share-grupper hoppet over\n`+(app.lastNotice||'Se detaljer for delingene som ikke ble utført.');return;}
+  if(saved||result.added||result.shared){
+    status.setAttribute('data-state','success');
+    status.textContent=[saved?`✓ ${saved} materiell bekreftet lagret i Adpoint`:null,result.added?`${result.added} nye plasser`:null,result.shared?`${result.shared} nye delinger`:null].filter(Boolean).join(' · ');return;
+  }
+  if(result.matched){status.setAttribute('data-state','success');status.textContent=`✓ Ingen ny innlegging · ${result.matched} treff på materiell som allerede er på plass`;return;}
+  if(app.lastNotice){status.setAttribute('data-state','warning');return;}
+  status.setAttribute('data-state',imports?'ready':'idle');
+}
+
 /* ========= simple task-based interface ========= */
 (function simplifyInterface(){
   ui.classList.add('ap-simple');
   const css=d.createElement('style');css.textContent=`
 #ap3p_bar.ap-simple{font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;min-width:420px;isolation:isolate}
-#ap3p_bar.ap-simple.ep-file-over{outline:2px solid #67caff;outline-offset:3px}
+#ap3p_bar.ap-simple.ep-file-over{outline:3px solid #67caff;outline-offset:3px}
+#ap3p_bar .ep-file-overlay{position:fixed;z-index:20;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;border:3px dashed #78cfff;border-radius:11px;background:rgba(13,32,52,.96);color:#f2faff;box-shadow:inset 0 0 55px #38bdf82b}
+#ap3p_bar .ep-file-overlay strong{font-size:28px;line-height:1.15;font-weight:750}
+#ap3p_bar .ep-file-overlay span{font-size:13px;color:#b9dcf4}
+#ap3p_bar .ep-file-arrow{display:flex;align-items:center;justify-content:center;width:68px;height:68px;border:2px solid #78cfff;border-radius:50%;font-size:46px;line-height:1;background:#1c476b}
+#ap3p_bar .ep-file-overlay[data-compact="true"]{padding:6px;gap:0}
+#ap3p_bar .ep-file-overlay[data-compact="true"] strong{font-size:16px}
+#ap3p_bar .ep-file-overlay[data-compact="true"] span,#ap3p_bar .ep-file-overlay[data-compact="true"] .ep-file-arrow{display:none}
+#ap3p_bar .ep-import-state{padding:11px;border:1px solid #3a4658;border-radius:8px;background:#10151e}
+#ap3p_bar .ep-import-state[data-ready="true"]{border-color:#39658b;background:#14283b}
+#ap3p_bar .ep-import-state [data-import-count]{font-weight:650;color:#b0bbca!important}
+#ap3p_bar .ep-import-state[data-ready="true"] [data-import-count]{color:#bce3ff!important}
+#ap3p_bar .ep-status{padding:11px 12px;border:1px solid #354154;border-radius:8px;background:#111821;line-height:1.5}
+#ap3p_bar .ep-status[data-state="ready"],#ap3p_bar .ep-status[data-state="working"]{border-color:#4277a2;background:#14283b;color:#c9e9ff!important}
+#ap3p_bar .ep-status[data-state="success"]{border-color:#438965;background:#142d22;color:#c9f6db!important;font-weight:600}
+#ap3p_bar .ep-status[data-state="error"]{border-color:#bd6868;background:#351d23;color:#ffe0e0!important}
+#ap3p_bar .ep-status[data-state="warning"]{border-color:#ab8551;background:#30271b;color:#ffe1ad!important}
+
 #ap3p_bar.ap-simple *{box-sizing:border-box}
 #ap3p_bar.ap-simple [hidden]{display:none!important}
 #ap3p_bar.ap-simple button,#ap3p_bar.ap-simple input,#ap3p_bar.ap-simple select{font:inherit}
@@ -2289,7 +2430,7 @@ async function runImportedShare(ids,map,images,settings,stats){
   const importHelp=make('p','Importer filen med scripts, lim inn fra Excel eller velg bildefiler.','ep-help');
   const importButtons=make('div','','ep-row');btnCSV.textContent='Velg fil';btnPaste.textContent='Lim inn fra Excel';importButtons.append(btnCSV,btnPaste,file);
   drop.textContent='Slipp CSV, JSON eller bilder hvor som helst i EasyPoint';drop.style.cssText='border:1px dashed #455169;border-radius:7px;padding:13px;text-align:center;color:#a9b3c4;font-size:12px';
-  const importedRow=make('div','','ep-row');mapChip.className='';mapChip.style.cssText='flex:1;font-size:12px;color:#b4dec7';
+  const importedRow=make('div','','ep-row ep-import-state');mapChip.className='';mapChip.setAttribute('data-import-count','');mapChip.style.cssText='flex:1;font-size:12px;color:#b4dec7';
   mapClear.textContent='Tøm import';mapClear.title='Fjern importerte scripts og bilder';mapClear.style.cssText='cursor:pointer;border:0;background:transparent;color:#a9b3c4;padding:3px;font-size:12px';
   importedRow.append(mapChip,mapClear);
   fillCard.append(importHeading,importHelp,importButtons,drop,importedRow);
@@ -2338,12 +2479,12 @@ async function runImportedShare(ids,map,images,settings,stats){
     btnShare.textContent=sharePlan?.total?`Utfør ${sharePlan.total} ${sharePlan.total===1?'deling':'delinger'}`:'Finn delinger';btnShare.disabled=app.busy||count<2;
     hidden(fillCard,mode!=='fill');hidden(bulk,mode!=='empty');hidden(options,mode!=='fill');
     hidden(btnRun,mode!=='fill');hidden(btnBulk,mode!=='empty');hidden(btnStop,!app.busy);
-    hidden(selectionDetails,!scanned.length);hidden(importedRow,!imports);
+    hidden(selectionDetails,!scanned.length);hidden(importedRow,false);hidden(mapClear,!imports);importedRow.setAttribute('data-ready',String(!!imports));
     hidden(policy,mode!=='fill'||!imports);
     btnScan.textContent=scanned.length?'Hent på nytt':'Hent fra Adpoint';
     scanHelp.textContent=scanned.length?`${scanned.length} annonselinjer hentet fra Adpoint.`:'Henter annonselinjene fra kampanjen du har åpen.';
     selectionSummary.textContent=count===scanned.length?`Alle ${count} linjer er valgt · endre utvalg`:`${count} av ${scanned.length} linjer er valgt · endre utvalg`;
-    mapChip.className='';mapChip.textContent=[mapping.length?`${mapping.length} scripts`:null,images?`${images} bilder`:null].filter(Boolean).join(' og ')+' klare';
+    mapChip.className='';mapChip.textContent=imports?[mapping.length?`${mapping.length} scripts`:null,images?`${images} bilder`:null].filter(Boolean).join(' og ')+' klare til innlegging':'Ingen materiell importert ennå';
     btnRun.textContent=count?`${shareOnImport?'Legg inn og del':'Legg inn'} på ${count} ${count===1?'linje':'linjer'}`:'Legg inn materiell';
     btnBulk.textContent=bulkPlan.valid?`Opprett ${bulkPlan.total} ${bulkPlan.total===1?'materiellplass':'materiellplasser'}`:'Opprett materiellplasser';
     btnRun.disabled=app.busy||!count||!imports;btnBulk.disabled=app.busy||!count||!bulkPlan.valid;
@@ -2364,6 +2505,7 @@ async function runImportedShare(ids,map,images,settings,stats){
     }else{
       status.style.color='#a9b3c4';status.textContent=!scanned.length?'Start med å hente annonsene fra Adpoint.':!count?'Velg minst én annonselinje.':mode==='empty'?'Velg størrelse og antall nye plasser.':mode==='share'?(count<2?'Velg minst to linjer for å dele mellom dem.':sharePlan?.total?'Delingsplanen er klar. Se koblingene og utfør delingen.':'Finn delinger for å koble samme plassnummer mellom linjene.'):!imports?'Velg fil eller lim inn scripts for å fortsette.':'Klar. Materiellet sendes etter tur og kontrolleres samlet til slutt.';
     }
+    renderResultStatus(status,imports);
   };
   app.showImports=()=>{if(app.busy)return;mode='fill';if(ui.getAttribute('data-min')==='1')setMinimized(false);refreshSimpleUI();};
   fillMode.onclick=app.showImports;
