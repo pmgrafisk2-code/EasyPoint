@@ -1,6 +1,6 @@
 javascript:(()=>{try{
 /* ============================================================
-   EasyPoint 2.10 / Adpoint — kontrollert kø og massetillegging
+   EasyPoint 2.11 / Adpoint — kontrollert kø og massetillegging
    - Norsk/engelsk Adpoint, linje- og placeholder-ID ved hvert steg
    - Én jobb om gangen; stopp/lukk venter på pågående lagring
    - Legg til antall materiellplasser uten CSV; auto-opprett ved import
@@ -28,9 +28,24 @@ const G=(k,f)=>{try{return JSON.parse(localStorage.getItem(k))??f}catch{return f
 const vis=el=>!!(el?.isConnected && !el.closest('[hidden]') && el.getClientRects().length && getComputedStyle(el).display!=='none' && getComputedStyle(el).visibility!=='hidden');
 const cs=s=>String(s||'').toLowerCase().replace(/\s+/g,'').replace(/×/g,'x');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+// Browser throttling must not consume a UI timeout while the Adpoint tab is hidden.
+const visibilityClock={paused:0,hiddenAt:d.hidden?Date.now():null};
+function updateVisibilityClock(){
+  if(d.hidden){if(visibilityClock.hiddenAt===null)visibilityClock.hiddenAt=Date.now();}
+  else if(visibilityClock.hiddenAt!==null){visibilityClock.paused+=Date.now()-visibilityClock.hiddenAt;visibilityClock.hiddenAt=null;}
+  app.waitingForVisibility=!!d.hidden&&app.busy;refreshSimpleUI();
+}
+function activeNow(){const now=Date.now();return now-visibilityClock.paused-(visibilityClock.hiddenAt===null?0:now-visibilityClock.hiddenAt);}
+async function waitUntilVisible(){
+  while(d.hidden&&!stopping&&!app.closing){app.waitingForVisibility=true;refreshSimpleUI();await sleep(180);}
+  if(app.waitingForVisibility){app.waitingForVisibility=false;refreshSimpleUI();}
+  return !stopping&&!app.closing;
+}
+listen(d,'visibilitychange',updateVisibilityClock);
+
 async function waitFor(fn,ms=6000,step=100){
-  const t=Date.now(); let v;
-  while(Date.now()-t<ms){ v=fn(); if(v) return v; await sleep(step); }
+  const t=activeNow(); let v;
+  while(activeNow()-t<ms){if(!await waitUntilVisible())return null;v=fn();if(v)return v;await sleep(step);}
   return null;
 }
 function clamp(n,min,max){return Math.max(min,Math.min(max,n))}
@@ -117,14 +132,23 @@ function isTileSelected(tile){
   if(tile.closest('.set-creativeTile__selected'))return true;
   return false;
 }
+function liveTileFor(record){
+  const tiles=getAllTiles(d).filter(tile=>tile.isConnected&&placeholderId(tile)===record.placeholder&&rowId(dataRowForTile(tile))===record.line);
+  return tiles.length===1?tiles[0]:null;
+}
 async function selectTile(tile){
-  if(!tile?.isConnected) return false;
-  if(isTileSelected(tile)) return true;
-  for(const target of tileClickTargets(tile)){
-    if(!target.isConnected) return false;
-    target.scrollIntoView({block:'center'});
-    target.click();
-    if(await waitFor(()=>tile.isConnected&&isTileSelected(tile),1000,70)) return true;
+  const row=dataRowForTile(tile),record={line:row&&rowId(row),placeholder:placeholderId(tile)};
+  if(!record.line||!record.placeholder)return false;
+  let live=liveTileFor(record);if(!live)return false;
+  if(selectedRecordMatches(record))return true;
+  const count=tileClickTargets(live).length;
+  for(let index=0;index<count;index++){
+    if(!await waitUntilVisible())return false;
+    live=liveTileFor(record);if(!live)return false;
+    if(selectedRecordMatches(record))return true;
+    const target=tileClickTargets(live)[index];if(!target?.isConnected)continue;
+    target.scrollIntoView({block:'center'});target.click();
+    if(await waitFor(()=>!!liveTileFor(record)&&selectedRecordMatches(record),1800,70))return true;
   }
   return false;
 }
@@ -556,6 +580,7 @@ function isEmpty3PValue(v){ return !normalizeEditorText(v).length; }
 async function getEditorValueStable(editor,tries=12,step=120){
   let last=null,stable=0;
   for(let i=0;i<tries;i++){
+    if(!await waitUntilVisible())throw new Error('Stoppet under lesing av editoren.');
     if(!editor.el.isConnected) throw new Error('Editor ble byttet mens innholdet ble lest.');
     const value=getEditorValue(editor);
     stable=value===last?stable+1:0; last=value;
@@ -827,8 +852,9 @@ async function addSizeScopedToLine(line,sizeText,variant=null,exactLabel=null){
     choices[0].el.click();
     // Mutation has happened. Never repeat this click after an ambiguous timeout.
     try{await waitForIdle(15000);}catch(error){throw new UncertainMutationError(error.message+' Tilleggingen må kontrolleres i Adpoint.');}
-    const start=Date.now();
-    while(Date.now()-start<12000){
+    const start=activeNow();
+    while(activeNow()-start<12000){
+      if(!await waitUntilVisible())throw new UncertainMutationError('Tilleggingen ble avbrutt etter innsending. Kontroller Adpoint før du prøver på nytt.');
       const now=await recordsForLine(id);
       const fresh=now.filter(x=>!previousIds.has(x.placeholder));
       if(fresh.length===1&&fresh[0].size===cs(sizeText)&&(!variant||fresh[0].variant===variant)) return fresh[0];
@@ -1005,7 +1031,7 @@ const log=d.createElement('div'); log.style.cssText='height:200px;overflow:auto;
 ui.append(hdr,body,listWrap,log); d.body.appendChild(ui);
 
 const LOG=m=>{log.textContent+=m+'\n'; log.scrollTop=log.scrollHeight;};
-const setInfo=o=>{app.lastStats={...o};info.textContent=`Linjer:${o.items}  Ferdig:${o.done}  Lagret:${o.saved||0}  Nye:${o.added||0}  Hoppet:${o.skip||0}  Feil:${o.err||0}  Usikkert:${o.uncertain||0}  Sendt:${o.submitted||0}  Delt:${o.shared||0}`;refreshSimpleUI();};
+const setInfo=o=>{app.lastStats={...o};info.textContent=`Linjer:${o.items}  Ferdig:${o.done}  Lagret:${o.saved||0}  Nye:${o.added||0}  Hoppet:${o.skip||0}  Bevart:${o.preserved||0}  Feil:${o.err||0}  Usikkert:${o.uncertain||0}  Sendt:${o.submitted||0}  Delt:${o.shared||0}`;refreshSimpleUI();};
 body.append(info,btnCSV,btnPaste,file,drop);
 
 /* ===== Apply saved UI state ===== */
@@ -1556,7 +1582,7 @@ btnStop.onclick=()=>{
   showToast('Stopper…','Venter på at pågående tillegging eller lagring blir avsluttet.');
 };
 
-async function readLineRecordsSnapshot(id){
+async function readLineRecordsSnapshot(id,options={}){
   const rows=findRowsByIdAll(String(id));
   if(rows.length>1)throw new Error(`Linje ${id}: fant ${rows.length} rader; kan ikke velge entydig.`);
   if(!rows.length)return {issue:'fant ingen lesbar annonselinje mens Adpoint oppdaterte visningen.'};
@@ -1568,7 +1594,8 @@ async function readLineRecordsSnapshot(id){
     const tiles=getAllTiles(detail);
     // Read complete snapshots. Dropping an unfinished card can shift versions or trigger extra slots.
     if(tiles.some(tile=>!placeholderId(tile)))return {issue:'fant en materiellplass uten entydig lesbar placeholder-ID.'};
-    await ensureShareRolesForTiles(tiles);
+    const roleTargets=new Set(options.roleTargets||[]);
+    await ensureShareRolesForTiles(options.skipFilledRoles?tiles.filter(tile=>!tileHasMaterial(tile)||roleTargets.has(placeholderId(tile))):tiles);
     let entries;
     try{entries=sizesFromExpanded(detail);}
     catch(error){if(/^Kan ikke lese størrelsen til delt placeholder/.test(error.message))return {issue:error.message};throw error;}
@@ -1576,18 +1603,19 @@ async function readLineRecordsSnapshot(id){
     for(const entry of entries){
       const placeholder=placeholderId(entry.tile);
       if(!placeholder)return {issue:'fant en materiellplass uten entydig lesbar placeholder-ID.'};
-      if(entry.shareGroupId&&!entry.shareMasterId)return {issue:`masteren til delt placeholder ${placeholder} er ikke lesbar i visningen ennå.`};
+      const roleDeferred=!!(entry.shareGroupId&&!entry.shareMasterId&&options.skipFilledRoles&&!roleTargets.has(placeholder)&&tileHasMaterial(entry.tile));
+      if(entry.shareGroupId&&!entry.shareMasterId&&!roleDeferred)return {issue:`masteren til delt placeholder ${placeholder} er ikke lesbar i visningen ennå.`};
       if(seen.has(placeholder))continue;seen.add(placeholder);
-      records.push({...entry,line:String(id),placeholder});
+      records.push({...entry,line:String(id),placeholder,roleDeferred});
     }
   }
   return {records};
 }
-async function recordsForLine(id){
+async function recordsForLine(id,options={}){
   if(!await ensureCampaignView())throw new Error('Fant ikke kampanjetabellen.');
   let issue='materiellområdet er ikke lesbart.';
   for(let attempt=0;attempt<10;attempt++){
-    const snapshot=await readLineRecordsSnapshot(id);
+    const snapshot=await readLineRecordsSnapshot(id,options);
     if(snapshot.records)return snapshot.records;
     issue=snapshot.issue;
     if(attempt<9)await sleep(Math.min(250,80+attempt*30));
@@ -1595,13 +1623,22 @@ async function recordsForLine(id){
   throw new Error(`Linje ${id}: ${issue} Visningen ble lest på nytt uten å sende materiell om igjen. Jobben er stoppet før neste innlegging.`);
 }
 
-async function getFreshRecord(line,placeholder){return (await recordsForLine(line)).find(x=>x.placeholder===placeholder)||null;}
+async function getFreshRecord(line,placeholder){return (await recordsForLine(line,{skipFilledRoles:true,roleTargets:[placeholder]})).find(x=>x.placeholder===placeholder)||null;}
 async function editorForRecord(record){
-  const fresh=await getFreshRecord(record.line,record.placeholder);
-  if(!fresh||!await selectTile(fresh.tile)||!await ensurePanelSwitchedToTile(fresh.tile))throw new Error(`Kunne ikke bekrefte valgt materiellplass ${record.placeholder}.`);
-  const editor=await get3PEditorStrict();
-  if(!editor)throw new Error(`Fant ikke 3rd party-editor på materiellplass ${record.placeholder}.`);
-  assertTarget(record);return editor;
+  for(let attempt=0;attempt<2;attempt++){
+    if(!await waitUntilVisible())throw new Error('Stoppet før editoren ble åpnet.');
+    const fresh=await getFreshRecord(record.line,record.placeholder);
+    if(!fresh)throw new Error(`Materiellplass ${record.placeholder} finnes ikke lenger.`);
+    if(await selectTile(fresh.tile)){
+      const live=liveTileFor(record);
+      if(live&&await ensurePanelSwitchedToTile(live)){
+        const editor=await get3PEditorStrict();
+        if(editor){assertTarget(record);return editor;}
+      }
+    }
+    verifiedSelection=null;boundEditor=null;
+  }
+  throw new Error(`Kunne ikke bekrefte valgt materiellplass ${record.placeholder}. Ingen materiell er sendt til denne plassen.`);
 }
 async function inspectRecord(record){
   const current=await getFreshRecord(record.line,record.placeholder);
@@ -1680,7 +1717,7 @@ btnScan.onclick=()=>withJob('Skanner Adpoint…',async()=>{
   for(const row of rows){if(stopping)break;await ensureLineExpanded(row);}
   for(const id of ids){
     if(stopping)break;
-    const records=await recordsForLine(id);
+    const records=await recordsForLine(id,{skipFilledRoles:true});
     let allowed=[];
     try{allowed=await getAllowedAddSizesForLine(id);}
     catch(error){LOG(`! Linje ${id}: autofyll kan brukes, men størrelsesmenyen kunne ikke leses: ${error.message}`);}
@@ -1728,7 +1765,7 @@ async function refreshAfterMutation(ids){
   const byId=new Map();
   for(const id of ids){
     try{
-      const records=await recordsForLine(id);byId.set(id,records);
+      const records=await recordsForLine(id,{skipFilledRoles:true});byId.set(id,records);
       const item=scanned.find(x=>x.id===id);if(item)item.label=prettyCounts(records)||'ingen plasser';
     }catch(error){LOG(`! Kunne ikke oppdatere visning for ${id}: ${error.message}`);}
   }
@@ -1742,23 +1779,30 @@ btnRun.onclick=()=>withJob('Legger inn materiell…',async()=>{
   const images=new Map([...imagePool].map(([key,files])=>[key,files.slice()]));
   const settings={overwrite:overwriteMode,add:addExtraSizes,reuse:reuseAssets,share:shareOnImport};
   const stats={items:ids.length,done:0,saved:0,submitted:0,pending:0,added:0,skip:0,err:0,matched:0};setInfo(stats);
-  const submittedWrites=[],writeLedger=new Map();let runError=null;
+  const submittedWrites=[],writeLedger=new Map(),inspectionCache=new Map();let runError=null;
   try{
+    app.phase='plan';app.jobLabel='Planlegger innleggingen…';refreshSimpleUI();
     const importLayout=await checkSharedImportConflicts(ids,map,images,settings);
+    const workPlan=buildQuickImportPlan(ids,importLayout,map,images,settings);
+    LOG(`Arbeidsplan: ${workPlan.candidates} mulige eksisterende masterplasser · ${workPlan.preserved} fylte plasser bevares uten å åpne editoren · ${workPlan.sharedCopies} tomme delte kopier følger masteren.${settings.add?' Behov for nye plasser kontrolleres før tillegging.':''}`);
+    app.phase='';app.jobLabel='Legger inn materiell…';refreshSimpleUI();
     for(const id of ids){
       requireRunning();await waitForIdle();
-      const records=await recordsForLine(id);
-      const groups=importWorkGroups(id,records,map,images,importLayout);
+      const groups=workPlan.byLine.get(id)||[];
       const allowed=settings.add?await getAllowedAddSizesForLine(id):[];
       if(!groups.length){LOG(`! Linje ${id}: ingen scripts/bilder matcher linjen. Kontroller importens størrelser og linje-ID-er.`);stats.skip++;stats.done++;setInfo(stats);continue;}
       for(const group of groups){
         requireRunning();
+        if(group.preserveOnly){
+          stats.preserved=(stats.preserved||0)+group.records.length;stats.skip+=group.records.length;setInfo(stats);
+          LOG(`✓ Linje ${id}, ${group.size}: ${group.records.length} fylte plasser beholdes uten å åpne editoren.`);continue;
+        }
         if(!group.records.length&&(!settings.add||!optionForGroup(allowed,group))){
           LOG(`• Linje ${id}: hopper over ${group.size}${group.variant?'/'+group.variant:''}; ingen passende plass eller tilgjengelig størrelsesvalg.`);
           continue;
         }
         const states=[];
-        for(const record of group.records){requireRunning();states.push(await inspectImportRecord(record,importLayout,writeLedger));}
+        for(const record of group.records){requireRunning();states.push(await inspectImportRecord(record,importLayout,writeLedger,inspectionCache));}
         const matches=settings.overwrite==='empty'?takeExistingMatches(group.assets,states,group.kind):{remaining:group.assets.slice(),matched:0};
         let remaining=matches.remaining;stats.matched+=matches.matched;
         if(matches.matched)LOG(`✓ Linje ${id}, ${group.size}: ${matches.matched} scripts finnes allerede og bevares.`);
@@ -1790,6 +1834,7 @@ btnRun.onclick=()=>withJob('Legger inn materiell…',async()=>{
             placed++;stats.matched++;setInfo(stats);LOG(`✓ Placeholder ${state.record.placeholder}: samme materiell er allerede sendt via en delt plass.`);continue;
           }
           // Re-read immediately before writing: UI and server may have changed since planning.
+          if(!await waitUntilVisible())requireRunning();
           const check=await inspectRecord(state.record);
           assertImportIdentity(check,importLayout);
           if(settings.overwrite==='empty'&&check.occupied)throw new Error('En planlagt tom plass er blitt fylt. Jobben stoppet før overskriving.');
@@ -1829,9 +1874,9 @@ btnRun.onclick=()=>withJob('Legger inn materiell…',async()=>{
     try{await runImportedShare(ids,map,images,settings,stats);setInfo(stats);}
     catch(error){runError=error;if(error.uncertain)stats.uncertain=(stats.uncertain||0)+1;else stats.err++;setInfo(stats);}
   }else if(settings.share&&(runError||stats.uncertain))LOG('Automatisk Share ble ikke startet fordi innleggingen eller etterkontrollen ikke var bekreftet.');
-  if(!stats.submitted&&!stats.matched&&!stats.shared&&!runError){app.lastNotice='Ingen materiell ble lagt inn. Se detaljer for linjer uten match eller ledige plasser.';LOG('! '+app.lastNotice);}
+  if(!stats.submitted&&!stats.matched&&!stats.preserved&&!stats.shared&&!runError){app.lastNotice='Ingen materiell ble lagt inn. Se detaljer for linjer uten match eller ledige plasser.';LOG('! '+app.lastNotice);}
   if(stats.uncertain&&!app.lastNotice)app.lastNotice=`${stats.uncertain} endringer er usikre. Kontroller disse i Adpoint.`;
-  LOG(`Resultat. Sendt: ${stats.submitted}. Kontrollert lagret/opplastet: ${stats.saved}. Allerede på plass: ${stats.matched}. Nye plasser: ${stats.added}. Hoppet over: ${stats.skip}. Nye Share-koblinger: ${stats.shared||0}. Eksisterende Share: ${stats.shareAlready||0}. Usikkert: ${stats.uncertain||0}.`);
+  LOG(`Resultat. Sendt: ${stats.submitted}. Kontrollert lagret/opplastet: ${stats.saved}. Allerede på plass: ${stats.matched}. Fylte plasser beholdt: ${stats.preserved||0}. Nye plasser: ${stats.added}. Hoppet over: ${stats.skip}. Nye Share-koblinger: ${stats.shared||0}. Eksisterende Share: ${stats.shareAlready||0}. Usikkert: ${stats.uncertain||0}.`);
   refreshSimpleUI();
   if(runError)throw runError;
   showToast(app.lastNotice?'Se resultatet':'Autofyll ferdig',app.lastNotice||`Kontrollert: ${stats.saved} · Allerede på plass: ${stats.matched} · Nye: ${stats.added} · Delt: ${stats.shared||0}`);
@@ -1854,7 +1899,7 @@ async function checkSubmittedWrite(receipt){
 }
 async function verifySubmittedWrites(receipts,stats,timeout=30000){
   if(!receipts.length)return;
-  const pending=receipts.slice(),deadline=Date.now()+timeout;
+  const pending=receipts.slice(),deadline=activeNow()+timeout;
   app.phase='verify';app.jobLabel='Kontrollerer lagringen…';refreshSimpleUI();
   LOG(`Etterkontroll: ${pending.length} innsendte materiell. Ingen ny innsending blir utført her.`);
   while(pending.length&&!stopping){
@@ -1869,7 +1914,7 @@ async function verifySubmittedWrites(receipts,stats,timeout=30000){
         }else receipt.lastError='Innholdet eller forhåndsvisningen er ikke bekreftet ennå.';
       }catch(error){receipt.lastError=error?.message||String(error);}
     }
-    if(!pending.length||stopping||Date.now()>=deadline)break;
+    if(!pending.length||stopping||activeNow()>=deadline)break;
     await sleep(350);
   }
   if(pending.length){
@@ -2190,7 +2235,7 @@ function nativeImportOrder(records){
   }
   for(const lines of formats.values()){
     const sourcePositions=new Map();
-    for(const items of lines.values())items.forEach((record,index)=>{if(!record.isChild)sourcePositions.set(record.placeholder,index+1);});
+    for(const items of lines.values())items.forEach((record,index)=>{if(!record.isChild&&!record.roleDeferred)sourcePositions.set(record.placeholder,index+1);});
     for(const items of lines.values()){
       const occupied=new Set();
       for(const record of items){
@@ -2210,14 +2255,25 @@ function nativeImportOrder(records){
   return order;
 }
 
-async function buildImportLayout(ids){
+async function buildImportLayout(ids,settings={},map=mapping,images=imagePool){
   const byId=new Map(),identities=new Map();
   const enrich=records=>records.map(record=>({...record,material:record.material||tileMaterial(record.tile)}));
-  for(const id of ids){requireRunning();byId.set(id,enrich(await recordsForLine(id)));}
+  const skipFilledRoles=settings.overwrite==='empty'&&!settings.add;
+  for(const id of ids){requireRunning();byId.set(id,enrich(await recordsForLine(id,{skipFilledRoles})));}
+  if(skipFilledRoles)for(const id of ids){
+    const targets=new Set();
+    for(const group of workGroups(id,byId.get(id),map,images))if(!preserveWholeGroup(group,settings))for(const record of group.records)targets.add(record.placeholder);
+    if(targets.size)byId.set(id,enrich(await recordsForLine(id,{skipFilledRoles:true,roleTargets:[...targets]})));
+  }
+  // Resolving an empty shared target can also establish the role of its filled master on another line.
+  for(const [id,records]of byId)byId.set(id,records.map(record=>{
+    if(!record.roleDeferred||!record.tile)return record;
+    const shared=recordShareMetadata(record.tile);return {...record,...shared,roleDeferred:!!(shared.shareGroupId&&!shared.shareMasterId)};
+  }));
   const selectedRecords=[...byId.values()].flat(),externalLines=new Set();
   for(const record of selectedRecords){
     identities.set(shareRecordKey(record),{master:record.shareMasterId||record.placeholder,size:record.size,variant:record.variant||'',side:record.side||''});
-    if(record.isChild&&record.tile&&!record.shareMasterId)throw new Error(`Masteren til delt placeholder ${record.placeholder} kunne ikke leses. Ingen innlegging er startet.`);
+    if(record.isChild&&record.tile&&!record.shareMasterId&&!record.roleDeferred)throw new Error(`Masteren til delt placeholder ${record.placeholder} kunne ikke leses. Ingen innlegging er startet.`);
     if(!record.shareMasterId||!record.material)continue;
     if(record.isChild&&record.tile){
       const master=findShareMasterTile(record.tile),row=master&&dataRowForTile(master);
@@ -2256,31 +2312,63 @@ function assertImportIdentity(state,layout){
   if(master!==expected.master||record.size!==expected.size||(record.variant||'')!==expected.variant||(record.side||'')!==expected.side||
     (state.writeRecord&&state.writeRecord.placeholder!==expected.master))throw new Error('Share-koblingen eller formatet endret seg siden importkontrollen. Hent annonser på nytt før videre innlegging.');
 }
-async function inspectImportRecord(record,layout,writeLedger){
+function recordHasVisibleMaterial(record){
+  if(tileHasMaterial(record.tile)||record.occupied)return true;
+  if(record.isChild&&record.tile){const master=findShareMasterTile(record.tile);return !!master&&tileHasMaterial(master);}
+  return false;
+}
+function preserveWholeGroup(group,settings){
+  return settings.overwrite==='empty'&&!settings.add&&group.records.length>0&&group.records.every(recordHasVisibleMaterial);
+}
+function buildQuickImportPlan(ids,layout,map,images,settings){
+  const byLine=new Map(),candidates=new Set();let preserved=0,sharedCopies=0;
+  for(const id of ids){
+    const groups=importWorkGroups(id,layout.byId.get(id)||[],map,images,layout);
+    for(const group of groups){
+      group.preserveOnly=preserveWholeGroup(group,settings);
+      if(group.preserveOnly){preserved+=group.records.length;continue;}
+      for(const record of group.records){
+        if(settings.overwrite==='empty'&&recordHasVisibleMaterial(record))continue;
+        const key=record.shareMasterId||record.placeholder;
+        if(candidates.has(key))sharedCopies++;else candidates.add(key);
+      }
+    }
+    byLine.set(id,groups);
+  }
+  return {byLine,candidates:candidates.size,preserved,sharedCopies};
+}
+async function inspectImportRecord(record,layout,writeLedger,inspectionCache=new Map()){
+  const key=record.shareMasterId||record.placeholder,submitted=writeLedger.get(key);
+  if(submitted){
+    const master=inspectionCache.get(key)?.writeRecord||record;
+    return {record,writeRecord:master,value:submitted.kind==='script'?submitted.value:'',occupied:true,contentKey:submitted.kind==='image'?submitted.value:null};
+  }
+  const cached=inspectionCache.get(key);
+  if(cached)return {...cached,record};
   const state=await inspectRecord(record);assertImportIdentity(state,layout);
-  const master=state.writeRecord||state.record,submitted=writeLedger.get(state.record.shareMasterId||state.record.placeholder);
-  const contentKey=state.contentKey||(master.tile?knownImageFile(master,materialSignature(master.tile)):null);
-  if(!submitted)return {...state,contentKey};
-  // A submitted master may still look empty while Adpoint is processing it.
-  // Count it as reserved so children neither consume another version nor create new slots.
-  return {...state,occupied:true,value:submitted.kind==='script'?submitted.value:state.value,contentKey:submitted.kind==='image'?submitted.value:contentKey};
+  const master=state.writeRecord||state.record,contentKey=state.contentKey||(master.tile?knownImageFile(master,materialSignature(master.tile)):null);
+  const result={...state,contentKey};inspectionCache.set(key,result);return result;
 }
 
 function desiredAssetDescriptor(kind,asset){return {kind,value:kind==='script'?normalizeTagForCompare(asset.tag):asset};}
 function sameDesiredAsset(a,b){return a.kind===b.kind&&a.value===b.value;}
 async function checkSharedImportConflicts(ids,map,images,settings){
-  const layout=await buildImportLayout(ids);
+  const layout=await buildImportLayout(ids,settings,map,images);
   const desired=new Map(),perRecord=new Map(),perSize=new Map();
   for(const id of ids){
     requireRunning();
-    for(const group of importWorkGroups(id,layout.byId.get(id),map,images,layout))group.records.forEach((record,index)=>{
+    for(const group of importWorkGroups(id,layout.byId.get(id),map,images,layout)){
+      if(preserveWholeGroup(group,settings))continue;
+      group.records.forEach((record,index)=>{
+      if(settings.overwrite==='empty'&&recordHasVisibleMaterial(record))return;
       const asset=settings.reuse?group.assets[index%group.assets.length]:group.assets[index];if(!asset)return;
       const descriptor=desiredAssetDescriptor(group.kind,asset),old=desired.get(record.shareMasterId||record.placeholder);
       if(old&&!sameDesiredAsset(old,descriptor))throw new Error(`Placeholder ${record.placeholder} er allerede delt, men importen angir ulikt materiell på de koblede linjene. Ingen innlegging er startet.`);
       desired.set(record.shareMasterId||record.placeholder,descriptor);
       const key=shareRecordKey(record);perRecord.set(key,{record,descriptor});
       if(!perSize.has(record.size))perSize.set(record.size,new Map());perSize.get(record.size).set(key,{record,descriptor});
-    });
+      });
+    }
   }
   if(!settings.share)return layout;
   // Native Share may retain different placeholder IDs. Probe only sizes for which
@@ -2330,6 +2418,7 @@ function renderResultStatus(status,imports){
     status.setAttribute('data-state','error');status.textContent=`Avbrutt · Bekreftet lagret i Adpoint: ${saved}.\n${app.lastError}`;return;
   }
   if(app.busy){
+    if(app.waitingForVisibility){status.setAttribute('data-state','working');status.textContent='Pause · gå tilbake til Adpoint-fanen for å fortsette.';return;}
     status.setAttribute('data-state','working');
     if(app.phase==='verify')status.textContent=`Kontrollerer lagring i Adpoint · ${saved} av ${submitted} bekreftet`;
     else if(submitted)status.textContent=`${submitted} sendt til Adpoint · ${saved} bekreftet lagret`+(stopping?' · stopper etter pågående steg':'');
@@ -2341,6 +2430,7 @@ function renderResultStatus(status,imports){
     status.setAttribute('data-state','success');
     status.textContent=[saved?`✓ ${saved} materiell bekreftet lagret i Adpoint`:null,result.added?`${result.added} nye plasser`:null,result.shared?`${result.shared} nye delinger`:null].filter(Boolean).join(' · ');return;
   }
+  if(result.preserved&&!saved&&!result.submitted){status.setAttribute('data-state','success');status.textContent=`✓ Ingen ny innlegging · ${result.preserved} fylte plasser er beholdt`;return;}
   if(result.matched){status.setAttribute('data-state','success');status.textContent=`✓ Ingen ny innlegging · ${result.matched} treff på materiell som allerede er på plass`;return;}
   if(app.lastNotice){status.setAttribute('data-state','warning');return;}
   status.setAttribute('data-state',imports?'ready':'idle');
@@ -2544,8 +2634,9 @@ async function ensureCampaignView(){
   return inCampaignTableView();
 }
 async function waitForIdle(timeout=12000){
-  const start=Date.now();
-  while(Date.now()-start<timeout){
+  const start=activeNow();
+  while(activeNow()-start<timeout){
+    if(!await waitUntilVisible())return;
     const blocking=[...d.querySelectorAll('.MuiBackdrop-root')].some(el=>{
       if(!vis(el)||el.closest('#ap3p_bar'))return false;
       const style=getComputedStyle(el);
